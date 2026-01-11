@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Generate Library Icons</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; background: #f0f0f0; }
+    .icon-container { display: flex; gap: 20px; flex-wrap: wrap; margin: 20px 0; }
+    .icon-box { background: white; padding: 20px; border-radius: 10px; text-align: center; }
+    canvas { border: 1px solid #ccc; border-radius: 10px; }
+    button { background: #556B2F; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; margin: 5px; }
+    button:hover { background: #3d4f22; }
+    h1 { color: #556B2F; }
+  </style>
+</head>
+<body>
+  <h1>Library App Icon Generator</h1>
+  <p>Click the buttons below to download the icons, then save them to the public folder.</p>
+
+  <div class="icon-container">
+    <div class="icon-box">
+      <h3>192x192</h3>
+      <canvas id="icon192" width="192" height="192"></canvas>
+      <br><button onclick="downloadIcon(192)">Download icon-192.png</button>
+    </div>
+    <div class="icon-box">
+      <h3>512x512</h3>
+      <canvas id="icon512" width="512" height="512"></canvas>
+      <br><button onclick="downloadIcon(512)">Download icon-512.png</button>
+    </div>
+    <div class="icon-box">
+      <h3>Favicon 64x64</h3>
+      <canvas id="icon64" width="64" height="64"></canvas>
+      <br><button onclick="downloadIcon(64)">Download favicon.png</button>
+    </div>
+  </div>
+
+  <script>
+    function drawIcon(ctx, size) {
+      const scale = size / 512;
+
+      // Background gradient
+      const gradient = ctx.createLinearGradient(0, 0, size, size);
+      gradient.addColorStop(0, '#556B2F');
+      gradient.addColorStop(1, '#3d4f22');
+
+      // Rounded rectangle background
+      const radius = 100 * scale;
+      ctx.beginPath();
+      ctx.moveTo(radius, 0);
+      ctx.lineTo(size - radius, 0);
+      ctx.quadraticCurveTo(size, 0, size, radius);
+      ctx.lineTo(size, size - radius);
+      ctx.quadraticCurveTo(size, size, size - radius, size);
+      ctx.lineTo(radius, size);
+      ctx.quadraticCurveTo(0, size, 0, size - radius);
+      ctx.lineTo(0, radius);
+      ctx.quadraticCurveTo(0, 0, radius, 0);
+      ctx.closePath();
+      ctx.fillStyle = gradient;
+      ctx.fill();
+
+      // Book icon
+      ctx.save();
+      ctx.translate(size / 2, size * 0.5);
+
+      const bookScale = scale * 0.8;
+
+      // Left pages
+      ctx.beginPath();
+      ctx.moveTo(-120 * bookScale, -100 * bookScale);
+      ctx.lineTo(-120 * bookScale, 100 * bookScale);
+      ctx.quadraticCurveTo(-60 * bookScale, 80 * bookScale, 0, 100 * bookScale);
+      ctx.lineTo(0, -100 * bookScale);
+      ctx.quadraticCurveTo(-60 * bookScale, -80 * bookScale, -120 * bookScale, -100 * bookScale);
+      ctx.fillStyle = '#f5f5dc';
+      ctx.fill();
+      ctx.strokeStyle = '#8B7355';
+      ctx.lineWidth = 3 * scale;
+      ctx.stroke();
+
+      // Right pages
+      ctx.beginPath();
+      ctx.moveTo(120 * bookScale, -100 * bookScale);
+      ctx.lineTo(120 * bookScale, 100 * bookScale);
+      ctx.quadraticCurveTo(60 * bookScale, 80 * bookScale, 0, 100 * bookScale);
+      ctx.lineTo(0, -100 * bookScale);
+      ctx.quadraticCurveTo(60 * bookScale, -80 * bookScale, 120 * bookScale, -100 * bookScale);
+      ctx.fillStyle = '#f5f5dc';
+      ctx.fill();
+      ctx.strokeStyle = '#8B7355';
+      ctx.lineWidth = 3 * scale;
+      ctx.stroke();
+
+      // Book spine
+      ctx.fillStyle = '#8B4513';
+      ctx.fillRect(-8 * bookScale, -100 * bookScale, 16 * bookScale, 200 * bookScale);
+
+      // Page lines
+      ctx.strokeStyle = '#ccc';
+      ctx.lineWidth = 2 * scale;
+      for (let i = 0; i < 4; i++) {
+        const y = (-60 + i * 30) * bookScale;
+        // Left
+        ctx.beginPath();
+        ctx.moveTo(-100 * bookScale, y);
+        ctx.lineTo(-20 * bookScale, y + 10 * bookScale);
+        ctx.stroke();
+        // Right
+        ctx.beginPath();
+        ctx.moveTo(100 * bookScale, y);
+        ctx.lineTo(20 * bookScale, y + 10 * bookScale);
+        ctx.stroke();
+      }
+
+      ctx.restore();
+
+      // Text (only for larger icons)
+      if (size >= 192) {
+        ctx.fillStyle = 'white';
+        ctx.font = `bold ${36 * scale}px Arial`;
+        ctx.textAlign = 'center';
+        ctx.fillText('CvSU Library', size / 2, size * 0.92);
+      }
+    }
+
+    function downloadIcon(size) {
+      const canvas = document.getElementById('icon' + size);
+      const link = document.createElement('a');
+      link.download = size === 64 ? 'favicon.png' : `icon-${size}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    }
+
+    // Draw all icons on load
+    window.onload = function() {
+      [64, 192, 512].forEach(size => {
+        const canvas = document.getElementById('icon' + size);
+        const ctx = canvas.getContext('2d');
+        drawIcon(ctx, size);
+      });
+    };
+  </script>
+</body>
+</html>

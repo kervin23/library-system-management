@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTheme } from "../context/ThemeContext";
+import { useNotifications } from "../context/NotificationContext";
 import Navbar from "../components/Navbar";
 import QRCodeOffline from "../components/QRCodeOffline";
 import PCReservationRedesigned from "../components/PCReservation";
@@ -11,6 +12,14 @@ const API_URL = process.env.REACT_APP_API_URL || "http://localhost:4000";
 
 export default function Student() {
   const { theme, isDark } = useTheme();
+  const {
+    isSupported: notificationsSupported,
+    permission: notificationPermission,
+    requestPermission,
+    startNotifications,
+    checkDueDates: checkNotificationDueDates,
+    testNotification
+  } = useNotifications();
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showQR, setShowQR] = useState(false);
@@ -26,6 +35,7 @@ export default function Student() {
   const [bookSearch, setBookSearch] = useState('');
   const [dueSoonBooks, setDueSoonBooks] = useState([]);
   const [showDueNotification, setShowDueNotification] = useState(true);
+  const [showNotificationBanner, setShowNotificationBanner] = useState(true);
   const [peopleInLibrary, setPeopleInLibrary] = useState(0);
   const navigate = useNavigate();
 
@@ -74,10 +84,14 @@ export default function Student() {
           setUser(data.user);
           loadStats(); loadBorrowedBooks(); loadHistory(); loadCompleteHistory(); loadPeopleInLibrary();
           setLoading(false);
+          // Start notification checker if permission is granted
+          if (notificationPermission === 'granted') {
+            startNotifications(token);
+          }
         } else { navigate('/login'); }
       })
       .catch(() => { localStorage.removeItem("token"); localStorage.removeItem("user"); navigate('/login'); });
-  }, [navigate]);
+  }, [navigate, notificationPermission, startNotifications]);
 
   const loadStats = () => {
     fetch(`${API_URL}/books/my-stats`, { headers: { "Authorization": `Bearer ${getToken()}` } })
@@ -150,6 +164,64 @@ export default function Student() {
         {/* DASHBOARD */}
         {activeView === 'dashboard' && (
           <>
+            {/* Notification Permission Banner */}
+            {notificationsSupported && notificationPermission !== 'granted' && showNotificationBanner && (
+              <div style={{
+                backgroundColor: isDark ? "#1a3a4a" : "#e3f2fd",
+                border: `1px solid ${theme.info}`,
+                borderRadius: "8px",
+                padding: "16px",
+                marginBottom: "24px",
+                display: "flex",
+                alignItems: "center",
+                gap: "12px",
+                flexWrap: "wrap"
+              }}>
+                <span style={{ fontSize: "24px" }}>🔔</span>
+                <div style={{ flex: 1, minWidth: "200px" }}>
+                  <strong style={{ color: theme.info }}>Enable Notifications</strong>
+                  <p style={{ margin: "4px 0 0", fontSize: "14px", color: theme.text }}>
+                    Get notified when your books are due soon so you never miss a return date!
+                  </p>
+                </div>
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <button
+                    onClick={async () => {
+                      const result = await requestPermission();
+                      if (result === 'granted') {
+                        testNotification();
+                        startNotifications(getToken());
+                      }
+                    }}
+                    style={{
+                      padding: "8px 16px",
+                      backgroundColor: theme.primary,
+                      color: "white",
+                      border: "none",
+                      borderRadius: "6px",
+                      cursor: "pointer",
+                      fontWeight: "600"
+                    }}
+                  >
+                    Enable
+                  </button>
+                  <button
+                    onClick={() => setShowNotificationBanner(false)}
+                    style={{
+                      padding: "8px 16px",
+                      backgroundColor: "transparent",
+                      color: theme.textMuted,
+                      border: `1px solid ${theme.border}`,
+                      borderRadius: "6px",
+                      cursor: "pointer"
+                    }}
+                  >
+                    Later
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Due Soon Alert */}
             {dueSoonBooks.length > 0 && showDueNotification && (
               <div style={{ backgroundColor: isDark ? "#3d2f00" : "#fff8e1", border: `1px solid ${theme.warning}`, borderRadius: "8px", padding: "16px", marginBottom: "24px", display: "flex", alignItems: "flex-start", gap: "12px" }}>

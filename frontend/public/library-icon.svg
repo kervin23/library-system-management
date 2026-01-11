@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#556B2F"/>
+      <stop offset="100%" style="stop-color:#3d4f22"/>
+    </linearGradient>
+  </defs>
+  <!-- Background -->
+  <rect width="512" height="512" rx="100" fill="url(#bgGrad)"/>
+  <!-- Book base -->
+  <g transform="translate(256, 280)">
+    <!-- Left book pages -->
+    <path d="M-120,-100 L-120,100 Q-60,80 0,100 L0,-100 Q-60,-80 -120,-100" fill="#f5f5dc" stroke="#8B7355" stroke-width="3"/>
+    <!-- Right book pages -->
+    <path d="M120,-100 L120,100 Q60,80 0,100 L0,-100 Q60,-80 120,-100" fill="#f5f5dc" stroke="#8B7355" stroke-width="3"/>
+    <!-- Book spine -->
+    <rect x="-8" y="-100" width="16" height="200" fill="#8B4513" rx="2"/>
+    <!-- Page lines left -->
+    <line x1="-100" y1="-60" x2="-20" y2="-50" stroke="#ccc" stroke-width="2"/>
+    <line x1="-100" y1="-30" x2="-20" y2="-20" stroke="#ccc" stroke-width="2"/>
+    <line x1="-100" y1="0" x2="-20" y2="10" stroke="#ccc" stroke-width="2"/>
+    <line x1="-100" y1="30" x2="-20" y2="40" stroke="#ccc" stroke-width="2"/>
+    <!-- Page lines right -->
+    <line x1="100" y1="-60" x2="20" y2="-50" stroke="#ccc" stroke-width="2"/>
+    <line x1="100" y1="-30" x2="20" y2="-20" stroke="#ccc" stroke-width="2"/>
+    <line x1="100" y1="0" x2="20" y2="10" stroke="#ccc" stroke-width="2"/>
+    <line x1="100" y1="30" x2="20" y2="40" stroke="#ccc" stroke-width="2"/>
+  </g>
+  <!-- CvSU Text -->
+  <text x="256" y="480" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="48" font-weight="bold">CvSU Library</text>
+</svg>

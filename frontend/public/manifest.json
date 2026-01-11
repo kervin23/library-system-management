@@ -1,6 +1,7 @@
 {
-  "short_name": "React App",
-  "name": "Create React App Sample",
+  "short_name": "CvSU Library",
+  "name": "CvSU Library Management System",
+  "description": "Library management system for Cavite State University - borrow books, reserve PCs, and manage library resources",
   "icons": [
     {
       "src": "favicon.ico",
@@ -8,18 +9,39 @@
       "type": "image/x-icon"
     },
     {
-      "src": "logo192.png",
+      "src": "icon-192.png",
       "type": "image/png",
-      "sizes": "192x192"
+      "sizes": "192x192",
+      "purpose": "any maskable"
     },
     {
-      "src": "logo512.png",
+      "src": "icon-512.png",
       "type": "image/png",
-      "sizes": "512x512"
+      "sizes": "512x512",
+      "purpose": "any maskable"
     }
   ],
-  "start_url": ".",
+  "start_url": "/",
   "display": "standalone",
-  "theme_color": "#000000",
-  "background_color": "#ffffff"
+  "orientation": "portrait",
+  "theme_color": "#556B2F",
+  "background_color": "#f8f6f3",
+  "categories": ["education", "productivity"],
+  "prefer_related_applications": false,
+  "shortcuts": [
+    {
+      "name": "My Borrowed Books",
+      "short_name": "Books",
+      "description": "View your borrowed books",
+      "url": "/student?tab=books",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Reserve PC",
+      "short_name": "PCs",
+      "description": "Reserve a computer",
+      "url": "/student?tab=pcs",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    }
+  ]
 }

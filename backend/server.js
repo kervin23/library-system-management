@@ -6,6 +6,7 @@ const bookRoutes = require("./routes/books");
 const pcRoutes = require("./routes/pcs");
 const requestRoutes = require("./routes/requests");
 const holidayRoutes = require("./routes/holidays");
+const notificationRoutes = require("./routes/notifications");
 
 const app = express();
 const PORT = 4000;
@@ -27,6 +28,7 @@ app.use("/books", bookRoutes);
 app.use("/pcs", pcRoutes);
 app.use("/requests", requestRoutes);
 app.use("/holidays", holidayRoutes);
+app.use("/notifications", notificationRoutes);
 
 // Default route
 app.get("/", (req, res) => {
@@ -35,7 +37,6 @@ app.get("/", (req, res) => {
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on http://localhost:${PORT}`);
-  console.log(`Also accessible at http://192.168.18.35:${PORT}`);
   console.log("Available routes:");
   console.log("  - /users (User management)");
   console.log("  - /attendance (Check-in/out system)");
@@ -43,4 +44,5 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log("  - /pcs (PC reservation system)");
   console.log("  - /requests (Pending requests)");
   console.log("  - /holidays (Holiday management)");
+  console.log("  - /notifications (Push notifications)");
 });
