@@ -1,6 +1,7 @@
 const express = require("express");
 const db = require("../db");
 const { authenticateToken, isAdmin } = require("../middleware/auth");
+const { getPhilippineISOString } = require("../utils/timezone");
 
 const router = express.Router();
 
@@ -113,7 +114,7 @@ router.post("/apply", authenticateToken, (req, res) => {
           }
 
           // Create active session (1 hour)
-          const startTime = new Date().toISOString();
+          const startTime = getPhilippineISOString();
           
           db.run(
             `INSERT INTO pc_reservations (userId, pcNumber, startTime, status)
@@ -199,7 +200,7 @@ router.post("/end-session/:sessionId", authenticateToken, (req, res) => {
         return res.status(403).json({ error: "Unauthorized" });
       }
 
-      const endTime = new Date().toISOString();
+      const endTime = getPhilippineISOString();
 
       db.run(
         `UPDATE pc_reservations 
@@ -220,7 +221,7 @@ router.post("/end-session/:sessionId", authenticateToken, (req, res) => {
             (err, nextReservation) => {
               if (nextReservation) {
                 // Promote reservation to active
-                const newStartTime = new Date().toISOString();
+                const newStartTime = getPhilippineISOString();
                 db.run(
                   `UPDATE pc_reservations 
                    SET status = 'active', startTime = ?

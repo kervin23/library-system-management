@@ -1,58 +1,13 @@
 const express = require("express");
 const db = require("../db");
 const { authenticateToken, isAdmin } = require("../middleware/auth");
+const { getPhilippineTime, getPhilippineISOString, calculateDueDatePH, formatDateForStorage, formatDateOnly } = require("../utils/timezone");
 
 const router = express.Router();
 
-// Calculate due date: 24 hours, skip Thursdays and holidays
+// Calculate due date: 24 hours from now in Philippine time, skip Thursdays and holidays
 async function calculateDueDate() {
-  return new Promise((resolve, reject) => {
-    // Start with 24 hours from now
-    const dueDate = new Date();
-    dueDate.setHours(dueDate.getHours() + 24);
-
-    // Get all holidays from database
-    db.all("SELECT date FROM holidays", [], (err, holidays) => {
-      if (err) {
-        console.error("Error fetching holidays:", err);
-        // If error, just return 24h without holiday check
-        resolve(adjustForThursday(dueDate).toISOString());
-        return;
-      }
-
-      const holidayDates = holidays.map(h => h.date);
-
-      // Adjust due date to skip Thursdays and holidays
-      let adjustedDate = new Date(dueDate);
-      let maxIterations = 30; // Prevent infinite loop
-
-      while (maxIterations > 0) {
-        const dayOfWeek = adjustedDate.getDay();
-        const dateStr = adjustedDate.toISOString().split('T')[0]; // YYYY-MM-DD format
-
-        // Check if Thursday (4) or a holiday
-        if (dayOfWeek === 4 || holidayDates.includes(dateStr)) {
-          // Move to next day
-          adjustedDate.setDate(adjustedDate.getDate() + 1);
-          maxIterations--;
-        } else {
-          break;
-        }
-      }
-
-      resolve(adjustedDate.toISOString());
-    });
-  });
-}
-
-// Helper function to adjust for Thursday only (sync version for fallback)
-function adjustForThursday(date) {
-  const adjustedDate = new Date(date);
-  // If Thursday (4), move to Friday
-  if (adjustedDate.getDay() === 4) {
-    adjustedDate.setDate(adjustedDate.getDate() + 1);
-  }
-  return adjustedDate;
+  return calculateDueDatePH(db);
 }
 
 // Get all books
@@ -171,7 +126,7 @@ router.post("/return/:borrowId", authenticateToken, (req, res) => {
         return res.status(400).json({ error: "Book already returned" });
       }
 
-      const returnDate = new Date().toISOString();
+      const returnDate = getPhilippineISOString();
 
       // Update borrow record
       db.run(
@@ -219,7 +174,7 @@ router.post("/admin-return/:borrowId", authenticateToken, isAdmin, (req, res) =>
         return res.status(400).json({ error: "Book already returned" });
       }
 
-      const returnDate = new Date().toISOString();
+      const returnDate = getPhilippineISOString();
 
       // Update borrow record
       db.run(
@@ -288,7 +243,7 @@ router.get("/my-books", authenticateToken, (req, res) => {
 // Get borrow stats for user
 router.get("/my-stats", authenticateToken, (req, res) => {
   const userId = req.user.id;
-  const now = new Date().toISOString();
+  const now = getPhilippineISOString();
 
   db.get(
     `SELECT 

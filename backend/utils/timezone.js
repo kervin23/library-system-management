@@ -1,45 +1,39 @@
 // Timezone helper for Philippine Standard Time (UTC+8)
 
-// Get current time in Philippine timezone
+// Get current Philippine time as a Date object
 function getPhilippineTime() {
+  // Create date string in Philippine timezone
   const now = new Date();
-  // Add 8 hours for Philippine timezone (UTC+8)
-  const phTime = new Date(now.getTime() + (8 * 60 * 60 * 1000));
-  return phTime;
+  const phTimeString = now.toLocaleString('en-US', { timeZone: 'Asia/Manila' });
+  return new Date(phTimeString);
 }
 
-// Get Philippine time as ISO string (for database storage)
+// Get Philippine time as a local datetime string (no timezone suffix)
+// Format: YYYY-MM-DDTHH:MM:SS (without Z)
 function getPhilippineISOString() {
-  return getPhilippineTime().toISOString();
+  const ph = getPhilippineTime();
+  const year = ph.getFullYear();
+  const month = String(ph.getMonth() + 1).padStart(2, '0');
+  const day = String(ph.getDate()).padStart(2, '0');
+  const hours = String(ph.getHours()).padStart(2, '0');
+  const minutes = String(ph.getMinutes()).padStart(2, '0');
+  const seconds = String(ph.getSeconds()).padStart(2, '0');
+
+  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
 }
 
 // Get Philippine time formatted for SQLite datetime
+// Format: YYYY-MM-DD HH:MM:SS
 function getPhilippineDateTimeString() {
   const ph = getPhilippineTime();
-  return ph.toISOString().slice(0, 19).replace('T', ' ');
-}
+  const year = ph.getFullYear();
+  const month = String(ph.getMonth() + 1).padStart(2, '0');
+  const day = String(ph.getDate()).padStart(2, '0');
+  const hours = String(ph.getHours()).padStart(2, '0');
+  const minutes = String(ph.getMinutes()).padStart(2, '0');
+  const seconds = String(ph.getSeconds()).padStart(2, '0');
 
-// Convert UTC date to Philippine time
-function utcToPhilippine(utcDateString) {
-  if (!utcDateString) return null;
-  const utcDate = new Date(utcDateString);
-  const phTime = new Date(utcDate.getTime() + (8 * 60 * 60 * 1000));
-  return phTime;
-}
-
-// Format date for display (Philippine time)
-function formatPhilippineDate(dateString) {
-  if (!dateString) return '';
-  const date = utcToPhilippine(dateString);
-  return date.toLocaleString('en-PH', {
-    timeZone: 'Asia/Manila',
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true
-  });
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 }
 
 // Calculate due date in Philippine time (24 hours from now, skip Thursdays and holidays)
@@ -50,7 +44,7 @@ async function calculateDueDatePH(db) {
 
     db.all("SELECT date FROM holidays", [], (err, holidays) => {
       if (err) {
-        resolve(dueDate.toISOString());
+        resolve(formatDateForStorage(dueDate));
         return;
       }
 
@@ -60,7 +54,7 @@ async function calculateDueDatePH(db) {
 
       while (maxIterations > 0) {
         const dayOfWeek = adjustedDate.getDay();
-        const dateStr = adjustedDate.toISOString().split('T')[0];
+        const dateStr = formatDateOnly(adjustedDate);
 
         // Skip Thursdays (day 4) and holidays
         if (dayOfWeek === 4 || holidayDates.includes(dateStr)) {
@@ -71,16 +65,37 @@ async function calculateDueDatePH(db) {
         }
       }
 
-      resolve(adjustedDate.toISOString());
+      resolve(formatDateForStorage(adjustedDate));
     });
   });
+}
+
+// Helper: Format date for storage (YYYY-MM-DDTHH:MM:SS)
+function formatDateForStorage(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const seconds = String(date.getSeconds()).padStart(2, '0');
+
+  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
+}
+
+// Helper: Format date only (YYYY-MM-DD)
+function formatDateOnly(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+
+  return `${year}-${month}-${day}`;
 }
 
 module.exports = {
   getPhilippineTime,
   getPhilippineISOString,
   getPhilippineDateTimeString,
-  utcToPhilippine,
-  formatPhilippineDate,
-  calculateDueDatePH
+  calculateDueDatePH,
+  formatDateForStorage,
+  formatDateOnly
 };
