@@ -1,6 +1,7 @@
 const express = require("express");
 const db = require("../db");
 const { authenticateToken } = require("../middleware/auth");
+const { getLocalISOString, formatDateForStorage } = require("../utils/timezone");
 
 const router = express.Router();
 
@@ -16,7 +17,7 @@ router.post("/subscribe", authenticateToken, (req, res) => {
   subscriptions.set(userId, {
     subscription,
     enabled: enabled !== false,
-    subscribedAt: new Date().toISOString()
+    subscribedAt: getLocalISOString()
   });
 
   console.log(`[Notifications] User ${userId} subscribed to notifications`);
@@ -91,7 +92,7 @@ router.get("/check-due-dates", authenticateToken, (req, res) => {
         dueSoon,
         overdue,
         totalBorrowed: books.length,
-        checkedAt: now.toISOString()
+        checkedAt: getLocalISOString()
       });
     }
   );
@@ -118,7 +119,7 @@ router.put("/settings", authenticateToken, (req, res) => {
     ...existing,
     enabled: enabled !== false,
     dueDaysWarning: dueDaysWarning || 2,
-    updatedAt: new Date().toISOString()
+    updatedAt: getLocalISOString()
   });
 
   res.json({ message: "Settings updated", enabled: enabled !== false });
@@ -144,7 +145,7 @@ router.get("/all-due-soon", authenticateToken, (req, res) => {
     JOIN users u ON bb.userId = u.id
     WHERE bb.status = 'borrowed' AND bb.dueDate <= ?
     ORDER BY bb.dueDate ASC`,
-    [twoDaysFromNow.toISOString()],
+    [formatDateForStorage(twoDaysFromNow)],
     (err, books) => {
       if (err) {
         console.error("Error fetching due soon books:", err);

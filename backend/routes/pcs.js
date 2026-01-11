@@ -7,26 +7,27 @@ const router = express.Router();
 
 // Get detailed status of all PCs
 router.get("/detailed-status", authenticateToken, (req, res) => {
-  const now = new Date();
-  
+  const now = getPhilippineISOString();
+
   db.all(
-    `SELECT 
+    `SELECT
       p.*,
-      CASE 
+      CASE
         WHEN pr.id IS NOT NULL AND pr.status = 'active' THEN 'occupied'
         ELSE 'available'
       END as status,
       pr.id as sessionId,
       pr.userId as currentUserId,
       pr.startTime,
-      CASE 
-        WHEN pr.id IS NOT NULL AND pr.status = 'active' 
-        THEN CAST((60 - (strftime('%s', 'now') - strftime('%s', pr.startTime)) / 60) AS INTEGER)
+      CASE
+        WHEN pr.id IS NOT NULL AND pr.status = 'active'
+        THEN CAST((60 - (strftime('%s', ?) - strftime('%s', pr.startTime)) / 60) AS INTEGER)
         ELSE 0
       END as remainingMinutes
      FROM pcs p
      LEFT JOIN pc_reservations pr ON p.pcNumber = pr.pcNumber AND pr.status = 'active'
      ORDER BY p.pcNumber`,
+    [now],
     (err, pcs) => {
       if (err) {
         console.error("Error loading PCs:", err);
@@ -40,26 +41,27 @@ router.get("/detailed-status", authenticateToken, (req, res) => {
 // Get user's current session
 router.get("/my-session", authenticateToken, (req, res) => {
   const userId = req.user.id;
-  
+  const now = getPhilippineISOString();
+
   db.get(
-    `SELECT 
+    `SELECT
       pr.*,
       p.location,
-      CASE 
+      CASE
         WHEN pr.status = 'active' THEN 'active'
         WHEN pr.status = 'reserved' THEN 'reserved'
         ELSE 'none'
       END as type,
-      CASE 
-        WHEN pr.status = 'active' 
-        THEN CAST((60 - (strftime('%s', 'now') - strftime('%s', pr.startTime)) / 60) AS INTEGER)
+      CASE
+        WHEN pr.status = 'active'
+        THEN CAST((60 - (strftime('%s', ?) - strftime('%s', pr.startTime)) / 60) AS INTEGER)
         ELSE 0
       END as remainingMinutes,
-      CASE 
-        WHEN pr.status = 'reserved' 
-        THEN (SELECT CAST((60 - (strftime('%s', 'now') - strftime('%s', startTime)) / 60) AS INTEGER)
-              FROM pc_reservations 
-              WHERE pcNumber = pr.pcNumber AND status = 'active' 
+      CASE
+        WHEN pr.status = 'reserved'
+        THEN (SELECT CAST((60 - (strftime('%s', ?) - strftime('%s', startTime)) / 60) AS INTEGER)
+              FROM pc_reservations
+              WHERE pcNumber = pr.pcNumber AND status = 'active'
               LIMIT 1)
         ELSE 0
       END as waitMinutes
@@ -67,7 +69,7 @@ router.get("/my-session", authenticateToken, (req, res) => {
      JOIN pcs p ON pr.pcNumber = p.pcNumber
      WHERE pr.userId = ? AND pr.status IN ('active', 'reserved')
      LIMIT 1`,
-    [userId],
+    [now, now, userId],
     (err, session) => {
       if (err) {
         console.error("Error loading session:", err);
@@ -241,11 +243,13 @@ router.post("/end-session/:sessionId", authenticateToken, (req, res) => {
 
 // Auto-expire sessions (call this periodically or via cron)
 router.post("/expire-sessions", authenticateToken, isAdmin, (req, res) => {
+  const now = getPhilippineISOString();
   db.run(
-    `UPDATE pc_reservations 
-     SET status = 'expired', endTime = datetime('now')
-     WHERE status = 'active' 
-     AND (strftime('%s', 'now') - strftime('%s', startTime)) > 3600`,
+    `UPDATE pc_reservations
+     SET status = 'expired', endTime = ?
+     WHERE status = 'active'
+     AND (strftime('%s', ?) - strftime('%s', startTime)) > 3600`,
+    [now, now],
     (err) => {
       if (err) {
         return res.status(500).json({ error: "Failed to expire sessions" });
@@ -257,14 +261,16 @@ router.post("/expire-sessions", authenticateToken, isAdmin, (req, res) => {
 
 // Get all active sessions (admin only)
 router.get("/sessions", authenticateToken, isAdmin, (req, res) => {
+  const now = getPhilippineISOString();
   db.all(
     `SELECT pr.*, u.name, u.studentNumber, p.location,
-      CAST((60 - (strftime('%s', 'now') - strftime('%s', pr.startTime)) / 60) AS INTEGER) as remainingMinutes
+      CAST((60 - (strftime('%s', ?) - strftime('%s', pr.startTime)) / 60) AS INTEGER) as remainingMinutes
      FROM pc_reservations pr
      JOIN users u ON pr.userId = u.id
      JOIN pcs p ON pr.pcNumber = p.pcNumber
      WHERE pr.status = 'active'
      ORDER BY pr.startTime DESC`,
+    [now],
     (err, sessions) => {
       if (err) {
         return res.status(500).json({ error: "Database error" });

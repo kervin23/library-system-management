@@ -7,10 +7,11 @@ const router = express.Router();
 
 // Helper function to log admin transactions
 function logAdminTransaction(adminId, adminName, action, targetType, targetId, targetName, details) {
+  const timestamp = getPhilippineISOString();
   db.run(
-    `INSERT INTO admin_transactions (adminId, adminName, action, targetType, targetId, targetName, details)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [adminId, adminName, action, targetType, targetId, targetName, details],
+    `INSERT INTO admin_transactions (adminId, adminName, action, targetType, targetId, targetName, details, timestamp)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [adminId, adminName, action, targetType, targetId, targetName, details, timestamp],
     (err) => {
       if (err) console.error("Error logging admin transaction:", err);
     }
@@ -71,13 +72,14 @@ router.post("/create", authenticateToken, (req, res) => {
           });
         }
 
-        // Create the request
+        // Create the request with explicit local timestamp
+        const createdAt = getPhilippineISOString();
         db.run(
           `INSERT INTO pending_requests
-           (userId, studentNumber, studentName, type, bookId, bookTitle, pcNumber, pcName, transactionId, status)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+           (userId, studentNumber, studentName, type, bookId, bookTitle, pcNumber, pcName, transactionId, status, createdAt)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
           [userId, studentNumber, studentName, type, bookId || null, bookTitle || null,
-           pcNumber || null, pcName || null, transactionId || null],
+           pcNumber || null, pcName || null, transactionId || null, createdAt],
           function(err) {
             if (err) {
               console.error("Error creating request:", err);
@@ -148,11 +150,12 @@ router.post("/approve/:id", authenticateToken, isAdmin, async (req, res) => {
 
           // Calculate due date (24h, skip Thursdays and holidays)
           const dueDate = await calculateDueDate();
+          const borrowDate = getPhilippineISOString();
 
-          // Create borrow record with approvedBy
+          // Create borrow record with approvedBy and explicit borrowDate
           db.run(
-            `INSERT INTO borrowed_books (userId, bookId, dueDate, approvedBy) VALUES (?, ?, ?, ?)`,
-            [request.userId, request.bookId, dueDate, adminId],
+            `INSERT INTO borrowed_books (userId, bookId, dueDate, approvedBy, borrowDate) VALUES (?, ?, ?, ?, ?)`,
+            [request.userId, request.bookId, dueDate, adminId, borrowDate],
             function(err) {
               if (err) {
                 return res.status(500).json({ error: "Failed to borrow book" });

@@ -4,6 +4,7 @@ const jwt = require("jsonwebtoken");
 const db = require("../db");
 const { authenticateToken, isAdmin, JWT_SECRET } = require("../middleware/auth");
 const { sendResetCode, sendWelcomeEmail, sendVerificationCode } = require("../utils/emailService");
+const { getLocalISOString } = require("../utils/timezone");
 
 const router = express.Router();
 
@@ -245,7 +246,7 @@ router.get("/", authenticateToken, isAdmin, (req, res) => {
 
 // GET all users with stats (Admin only)
 router.get("/with-stats", authenticateToken, isAdmin, (req, res) => {
-  const now = new Date().toISOString();
+  const now = getLocalISOString();
 
   db.all(
     `SELECT
@@ -273,10 +274,11 @@ router.get("/with-stats", authenticateToken, isAdmin, (req, res) => {
 
 // Helper function to log admin transactions
 function logAdminTransaction(adminId, adminName, action, targetType, targetId, targetName, details) {
+  const timestamp = getLocalISOString();
   db.run(
-    `INSERT INTO admin_transactions (adminId, adminName, action, targetType, targetId, targetName, details)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [adminId, adminName, action, targetType, targetId, targetName, details],
+    `INSERT INTO admin_transactions (adminId, adminName, action, targetType, targetId, targetName, details, timestamp)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [adminId, adminName, action, targetType, targetId, targetName, details, timestamp],
     (err) => {
       if (err) console.error("Error logging admin transaction:", err);
     }

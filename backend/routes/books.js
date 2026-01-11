@@ -74,12 +74,13 @@ router.post("/borrow", authenticateToken, async (req, res) => {
 
         // Calculate due date (24h, skipping Thursdays and holidays)
         const dueDate = await calculateDueDate();
+        const borrowDate = getPhilippineISOString();
 
-        // Create borrow record
+        // Create borrow record with explicit borrowDate
         db.run(
-          `INSERT INTO borrowed_books (userId, bookId, dueDate)
-           VALUES (?, ?, ?)`,
-          [userId, bookId, dueDate],
+          `INSERT INTO borrowed_books (userId, bookId, dueDate, borrowDate)
+           VALUES (?, ?, ?, ?)`,
+          [userId, bookId, dueDate, borrowDate],
           function(err) {
             if (err) {
               return res.status(500).json({ error: "Failed to borrow book" });
@@ -304,6 +305,7 @@ router.get("/my-history", authenticateToken, (req, res) => {
 
 // Get complete history for admin (all borrow/return activities)
 router.get("/admin-history", authenticateToken, isAdmin, (req, res) => {
+  const now = getPhilippineISOString();
   db.all(
     `SELECT
       bb.id,
@@ -318,7 +320,7 @@ router.get("/admin-history", authenticateToken, isAdmin, (req, res) => {
       u.name as studentName,
       u.studentNumber,
       CASE
-        WHEN bb.status = 'borrowed' AND bb.dueDate < datetime('now') THEN 1
+        WHEN bb.status = 'borrowed' AND bb.dueDate < ? THEN 1
         ELSE 0
       END as isOverdue
      FROM borrowed_books bb
@@ -326,6 +328,7 @@ router.get("/admin-history", authenticateToken, isAdmin, (req, res) => {
      JOIN users u ON bb.userId = u.id
      ORDER BY bb.borrowDate DESC
      LIMIT 500`,
+    [now],
     (err, history) => {
       if (err) {
         return res.status(500).json({ error: "Database error" });
