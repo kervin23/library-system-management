@@ -1,8 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
+import { useTheme } from "../context/ThemeContext";
 
 const API_URL = process.env.REACT_APP_API_URL || "http://localhost:4000";
 
 export default function AdminRequestsPanel() {
+  const { theme, isDark } = useTheme();
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [processingId, setProcessingId] = useState(null);
@@ -11,6 +13,10 @@ export default function AdminRequestsPanel() {
   const [selectedRequest, setSelectedRequest] = useState(null);
   const [successMessage, setSuccessMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+  const [showQRScanner, setShowQRScanner] = useState(false);
+  const [scannerReady, setScannerReady] = useState(false);
+  const scannerRef = useRef(null);
+  const html5QrcodeScannerRef = useRef(null);
 
   const getToken = () => localStorage.getItem("token");
 
@@ -36,10 +42,83 @@ export default function AdminRequestsPanel() {
     }
   };
 
+  // QR Scanner functions
+  const startScanner = () => {
+    setShowQRScanner(true);
+    setScannerReady(false);
+
+    setTimeout(async () => {
+      if (scannerRef.current && !html5QrcodeScannerRef.current) {
+        try {
+          const { Html5QrcodeScanner } = await import("html5-qrcode");
+          html5QrcodeScannerRef.current = new Html5QrcodeScanner(
+            "verification-qr-reader",
+            {
+              fps: 10,
+              qrbox: { width: 250, height: 250 },
+              aspectRatio: 1.0,
+              videoConstraints: {
+                facingMode: "environment"
+              }
+            },
+            false
+          );
+
+          html5QrcodeScannerRef.current.render(
+            (decodedText) => {
+              handleQRScanResult(decodedText);
+            },
+            (error) => {
+              console.warn("QR scan error:", error);
+            }
+          );
+          setScannerReady(true);
+        } catch (err) {
+          console.error("Failed to load QR scanner:", err);
+          setErrorMessage("Failed to load QR scanner. Please enter manually.");
+          setShowQRScanner(false);
+        }
+      }
+    }, 100);
+  };
+
+  const stopScanner = () => {
+    if (html5QrcodeScannerRef.current) {
+      html5QrcodeScannerRef.current.clear();
+      html5QrcodeScannerRef.current = null;
+    }
+    setShowQRScanner(false);
+    setScannerReady(false);
+  };
+
+  const handleQRScanResult = (scannedData) => {
+    // Parse QR data: STUDENT:1:20240001
+    const parts = scannedData.split(':');
+    if (parts[0] === 'STUDENT' && parts[2]) {
+      setVerificationStudentNumber(parts[2]);
+      stopScanner();
+    } else {
+      // Try using the whole scanned data as student number
+      setVerificationStudentNumber(scannedData);
+      stopScanner();
+    }
+  };
+
+  // Cleanup scanner on unmount or when modal closes
+  useEffect(() => {
+    return () => {
+      if (html5QrcodeScannerRef.current) {
+        html5QrcodeScannerRef.current.clear();
+        html5QrcodeScannerRef.current = null;
+      }
+    };
+  }, []);
+
   const handleApproveClick = (request) => {
     setSelectedRequest(request);
     setVerificationStudentNumber("");
     setShowVerification(true);
+    setShowQRScanner(false);
   };
 
   const handleApprove = async () => {
@@ -203,30 +282,90 @@ export default function AdminRequestsPanel() {
               </p>
             </div>
 
+            {/* QR Scanner Toggle */}
+            <div style={{ marginBottom: "15px" }}>
+              <button
+                onClick={showQRScanner ? stopScanner : startScanner}
+                style={{
+                  width: "100%",
+                  padding: "12px",
+                  backgroundColor: showQRScanner ? "#f44336" : (isDark ? theme.primary : "#667eea"),
+                  color: "white",
+                  border: "none",
+                  borderRadius: "8px",
+                  fontWeight: "600",
+                  cursor: "pointer",
+                  fontSize: "15px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "8px"
+                }}
+              >
+                📷 {showQRScanner ? "Stop Scanner" : "Scan QR Code"}
+              </button>
+            </div>
+
+            {/* QR Scanner View */}
+            {showQRScanner && (
+              <div style={{
+                marginBottom: "15px",
+                padding: "15px",
+                backgroundColor: "#000",
+                borderRadius: "10px"
+              }}>
+                <div
+                  id="verification-qr-reader"
+                  ref={scannerRef}
+                  style={{ width: "100%", maxWidth: "300px", margin: "0 auto" }}
+                ></div>
+                {!scannerReady && (
+                  <p style={{ color: "#fff", textAlign: "center", marginTop: "10px" }}>
+                    Loading camera...
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* Divider */}
+            <div style={{
+              display: "flex",
+              alignItems: "center",
+              margin: "15px 0",
+              color: isDark ? theme.textMuted : "#999"
+            }}>
+              <div style={{ flex: 1, height: "1px", backgroundColor: isDark ? theme.border : "#ddd" }}></div>
+              <span style={{ padding: "0 15px", fontSize: "12px" }}>OR ENTER MANUALLY</span>
+              <div style={{ flex: 1, height: "1px", backgroundColor: isDark ? theme.border : "#ddd" }}></div>
+            </div>
+
             <div style={{ marginBottom: "20px", textAlign: "left" }}>
               <label style={{
                 display: "block",
                 marginBottom: "8px",
                 fontSize: "14px",
-                fontWeight: "600"
+                fontWeight: "600",
+                color: isDark ? theme.text : "#333"
               }}>
-                Scan QR or Enter Student Number:
+                Student Number:
               </label>
               <input
                 type="text"
                 value={verificationStudentNumber}
                 onChange={(e) => setVerificationStudentNumber(e.target.value.replace(/[^0-9]/g, ''))}
-                placeholder="Student number"
-                autoFocus
+                placeholder="Enter student number"
+                autoFocus={!showQRScanner}
                 style={{
                   width: "100%",
                   padding: "12px",
-                  border: "2px solid #ddd",
+                  border: `2px solid ${verificationStudentNumber === selectedRequest.studentNumber ? "#4caf50" : (isDark ? theme.border : "#ddd")}`,
                   borderRadius: "8px",
                   fontSize: "16px",
                   boxSizing: "border-box",
                   textAlign: "center",
-                  fontWeight: "600"
+                  fontWeight: "600",
+                  backgroundColor: isDark ? theme.surface : "#fff",
+                  color: isDark ? theme.text : "#333"
                 }}
                 onKeyPress={(e) => {
                   if (e.key === 'Enter' && verificationStudentNumber) {
@@ -234,6 +373,11 @@ export default function AdminRequestsPanel() {
                   }
                 }}
               />
+              {verificationStudentNumber && verificationStudentNumber === selectedRequest.studentNumber && (
+                <p style={{ color: "#4caf50", fontSize: "12px", marginTop: "5px", textAlign: "center" }}>
+                  ✓ Student number matches!
+                </p>
+              )}
             </div>
 
             {errorMessage && (
@@ -252,6 +396,7 @@ export default function AdminRequestsPanel() {
             <div style={{ display: "flex", gap: "10px" }}>
               <button
                 onClick={() => {
+                  stopScanner();
                   setShowVerification(false);
                   setSelectedRequest(null);
                   setErrorMessage("");

@@ -1,6 +1,7 @@
 const express = require("express");
 const db = require("../db");
 const { authenticateToken, isAdmin } = require("../middleware/auth");
+const { getPhilippineISOString, getPhilippineDateTimeString, calculateDueDatePH } = require("../utils/timezone");
 
 const router = express.Router();
 
@@ -31,37 +32,9 @@ function isStudentCheckedIn(userId, callback) {
   );
 }
 
-// Calculate due date: 24 hours, skip Thursdays and holidays
+// Calculate due date: 24 hours, skip Thursdays and holidays (using Philippine time)
 async function calculateDueDate() {
-  return new Promise((resolve) => {
-    const dueDate = new Date();
-    dueDate.setHours(dueDate.getHours() + 24);
-
-    db.all("SELECT date FROM holidays", [], (err, holidays) => {
-      if (err) {
-        resolve(dueDate.toISOString());
-        return;
-      }
-
-      const holidayDates = holidays.map(h => h.date);
-      let adjustedDate = new Date(dueDate);
-      let maxIterations = 30;
-
-      while (maxIterations > 0) {
-        const dayOfWeek = adjustedDate.getDay();
-        const dateStr = adjustedDate.toISOString().split('T')[0];
-
-        if (dayOfWeek === 4 || holidayDates.includes(dateStr)) {
-          adjustedDate.setDate(adjustedDate.getDate() + 1);
-          maxIterations--;
-        } else {
-          break;
-        }
-      }
-
-      resolve(adjustedDate.toISOString());
-    });
-  });
+  return calculateDueDatePH(db);
 }
 
 // Create pending request (student side)
@@ -189,9 +162,10 @@ router.post("/approve/:id", authenticateToken, isAdmin, async (req, res) => {
               db.run("UPDATE books SET available = available - 1 WHERE id = ?", [request.bookId]);
 
               // Mark request as approved
+              const approvedAt = getPhilippineISOString();
               db.run(
-                `UPDATE pending_requests SET status = 'approved', approvedAt = datetime('now'), approvedBy = ? WHERE id = ?`,
-                [adminId, id],
+                `UPDATE pending_requests SET status = 'approved', approvedAt = ?, approvedBy = ? WHERE id = ?`,
+                [approvedAt, adminId, id],
                 (err) => {
                   if (err) {
                     return res.status(500).json({ error: "Failed to update request" });
@@ -218,7 +192,7 @@ router.post("/approve/:id", authenticateToken, isAdmin, async (req, res) => {
               return res.status(400).json({ error: "Borrow record not found" });
             }
 
-            const returnDate = new Date().toISOString();
+            const returnDate = getPhilippineISOString();
 
             db.run(
               `UPDATE borrowed_books SET status = 'returned', returnDate = ? WHERE id = ?`,
@@ -232,9 +206,10 @@ router.post("/approve/:id", authenticateToken, isAdmin, async (req, res) => {
                 db.run("UPDATE books SET available = available + 1 WHERE id = ?", [request.bookId]);
 
                 // Mark request as approved
+                const approvedAtReturn = getPhilippineISOString();
                 db.run(
-                  `UPDATE pending_requests SET status = 'approved', approvedAt = datetime('now'), approvedBy = ? WHERE id = ?`,
-                  [adminId, id],
+                  `UPDATE pending_requests SET status = 'approved', approvedAt = ?, approvedBy = ? WHERE id = ?`,
+                  [approvedAtReturn, adminId, id],
                   (err) => {
                     if (err) {
                       return res.status(500).json({ error: "Failed to update request" });
@@ -262,7 +237,7 @@ router.post("/approve/:id", authenticateToken, isAdmin, async (req, res) => {
               return res.status(500).json({ error: "Database error" });
             }
 
-            const startTime = new Date().toISOString();
+            const startTime = getPhilippineISOString();
             const status = occupied ? 'reserved' : 'active';
 
             db.run(
@@ -274,9 +249,10 @@ router.post("/approve/:id", authenticateToken, isAdmin, async (req, res) => {
                 }
 
                 // Mark request as approved
+                const approvedAtPC = getPhilippineISOString();
                 db.run(
-                  `UPDATE pending_requests SET status = 'approved', approvedAt = datetime('now'), approvedBy = ? WHERE id = ?`,
-                  [adminId, id],
+                  `UPDATE pending_requests SET status = 'approved', approvedAt = ?, approvedBy = ? WHERE id = ?`,
+                  [approvedAtPC, adminId, id],
                   (err) => {
                     if (err) {
                       return res.status(500).json({ error: "Failed to update request" });
@@ -344,9 +320,10 @@ router.post("/reject/:id", authenticateToken, isAdmin, (req, res) => {
       return res.status(404).json({ error: "Request not found" });
     }
 
+    const rejectedAt = getPhilippineISOString();
     db.run(
-      `UPDATE pending_requests SET status = 'rejected', approvedAt = datetime('now'), approvedBy = ? WHERE id = ?`,
-      [adminId, id],
+      `UPDATE pending_requests SET status = 'rejected', approvedAt = ?, approvedBy = ? WHERE id = ?`,
+      [rejectedAt, adminId, id],
       function(err) {
         if (err) {
           return res.status(500).json({ error: "Database error" });

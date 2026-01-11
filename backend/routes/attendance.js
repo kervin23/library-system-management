@@ -1,6 +1,7 @@
 const express = require("express");
 const db = require("../db");
 const { authenticateToken, isAdmin } = require("../middleware/auth");
+const { getPhilippineISOString } = require("../utils/timezone");
 
 const router = express.Router();
 
@@ -35,7 +36,7 @@ router.post("/toggle", authenticateToken, isAdmin, (req, res) => {
 
           const isCheckedIn = status && status.checkedIn === 1;
           const action = isCheckedIn ? "checkout" : "checkin";
-          const timestamp = new Date().toISOString();
+          const timestamp = getPhilippineISOString();
 
           // Log the action
           db.run(
