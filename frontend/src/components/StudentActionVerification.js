@@ -1,73 +1,188 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 const API_URL = process.env.REACT_APP_API_URL || "http://localhost:4000";
 
-export default function StudentActionVerification({ 
-  user, 
+export default function StudentActionVerification({
+  user,
   actionType, // 'borrow', 'return', 'pc_reserve', 'pc_release'
-  actionData, // bookId or pcNumber
+  actionData, // bookId or pcNumber or borrowId
+  bookTitle, // optional - for display purposes
   onSuccess,
-  onCancel 
+  onCancel
 }) {
-  const [verificationCode, setVerificationCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [requestSent, setRequestSent] = useState(false);
+  const [checkingInterval, setCheckingInterval] = useState(null);
 
   const getToken = () => localStorage.getItem("token");
 
-  const handleVerify = async () => {
-    // For now, we'll use student number as verification
-    // In production, admin would scan QR and approve
-    if (verificationCode !== user.studentNumber) {
-      setMessage("Incorrect student number!");
-      return;
-    }
+  // Clean up interval on unmount
+  useEffect(() => {
+    return () => {
+      if (checkingInterval) {
+        clearInterval(checkingInterval);
+      }
+    };
+  }, [checkingInterval]);
 
+  const handleSendRequest = async () => {
     setLoading(true);
     setMessage("");
 
     try {
-      let endpoint = "";
-      let method = "POST";
-      let body = {};
+      // Handle PC end session directly (no admin approval needed)
+      if (actionType === 'pc_end') {
+        const response = await fetch(`${API_URL}/pcs/end-session/${actionData}`, {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${getToken()}` }
+        });
+        const data = await response.json();
 
-      switch (actionType) {
-        case 'borrow':
-          endpoint = `${API_URL}/books/borrow`;
-          body = { bookId: actionData };
-          break;
-        case 'return':
-          endpoint = `${API_URL}/books/return/${actionData}`;
-          break;
-        case 'pc_reserve':
-          endpoint = `${API_URL}/pcs/reserve`;
-          body = { pcNumber: actionData };
-          break;
-        case 'pc_release':
-          endpoint = `${API_URL}/pcs/release/${actionData}`;
-          break;
+        if (response.ok) {
+          onSuccess({ message: "Session ended successfully" });
+        } else {
+          setMessage(data.error || "Failed to end session");
+        }
+        setLoading(false);
+        return;
       }
 
-      const response = await fetch(endpoint, {
-        method: method,
+      // Determine request type
+      let requestType;
+      if (actionType === 'borrow') {
+        requestType = 'borrow_book';
+      } else if (actionType === 'return') {
+        requestType = 'return_book';
+      } else if (actionType === 'pc_reserve' || actionType === 'pc_apply') {
+        requestType = 'reserve_pc';
+      } else {
+        setMessage("Invalid action type");
+        setLoading(false);
+        return;
+      }
+
+      let requestBody = { type: requestType };
+
+      if (actionType === 'borrow') {
+        // Fetch book details
+        const bookResponse = await fetch(`${API_URL}/books`, {
+          headers: { "Authorization": `Bearer ${getToken()}` }
+        });
+        const books = await bookResponse.json();
+        const book = books.find(b => b.id === actionData);
+
+        if (!book) {
+          setMessage("Book not found");
+          setLoading(false);
+          return;
+        }
+
+        requestBody.bookId = actionData;
+        requestBody.bookTitle = book.title;
+      } else if (actionType === 'return') {
+        // Fetch borrowed book details
+        const borrowedResponse = await fetch(`${API_URL}/books/my-books`, {
+          headers: { "Authorization": `Bearer ${getToken()}` }
+        });
+        const borrowedBooks = await borrowedResponse.json();
+        const borrowedBook = borrowedBooks.find(b => b.id === actionData);
+
+        if (!borrowedBook) {
+          setMessage("Borrow record not found");
+          setLoading(false);
+          return;
+        }
+
+        requestBody.bookId = borrowedBook.bookId;
+        requestBody.bookTitle = borrowedBook.title;
+        requestBody.transactionId = actionData;
+      } else if (actionType === 'pc_reserve' || actionType === 'pc_apply') {
+        requestBody.pcNumber = actionData;
+        requestBody.pcName = `PC-${actionData}`;
+      }
+
+      // Create pending request
+      const response = await fetch(`${API_URL}/requests/create`, {
+        method: "POST",
         headers: {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${getToken()}`
         },
-        body: Object.keys(body).length > 0 ? JSON.stringify(body) : undefined
+        body: JSON.stringify(requestBody)
       });
 
       const data = await response.json();
 
       if (response.ok) {
-        onSuccess(data);
+        setRequestSent(true);
+        setMessage("Request sent! Waiting for admin approval...");
+
+        // Start checking for approval (poll every 3 seconds)
+        const interval = setInterval(async () => {
+          try {
+            // Check if the action has been completed
+            if (actionType === 'borrow' || actionType === 'return') {
+              await fetch(`${API_URL}/books/my-stats`, {
+                headers: { "Authorization": `Bearer ${getToken()}` }
+              });
+
+              // Check borrowed books to see if our request was processed
+              const borrowedResponse = await fetch(`${API_URL}/books/my-books`, {
+                headers: { "Authorization": `Bearer ${getToken()}` }
+              });
+              const borrowedBooks = await borrowedResponse.json();
+
+              if (actionType === 'borrow') {
+                // Check if the book was borrowed
+                const nowBorrowed = borrowedBooks.find(b =>
+                  b.bookId === actionData && b.status === 'borrowed'
+                );
+                if (nowBorrowed) {
+                  clearInterval(interval);
+                  onSuccess({ dueDate: nowBorrowed.dueDate });
+                }
+              } else if (actionType === 'return') {
+                // Check if the book was returned
+                const stillBorrowed = borrowedBooks.find(b =>
+                  b.id === actionData && b.status === 'borrowed'
+                );
+                if (!stillBorrowed) {
+                  clearInterval(interval);
+                  onSuccess({});
+                }
+              }
+            } else if (actionType === 'pc_reserve' || actionType === 'pc_apply') {
+              // Check if PC reservation was approved
+              const sessionResponse = await fetch(`${API_URL}/pcs/my-session`, {
+                headers: { "Authorization": `Bearer ${getToken()}` }
+              });
+              const session = await sessionResponse.json();
+
+              if (session && session.pcNumber === actionData) {
+                clearInterval(interval);
+                onSuccess({ pcNumber: actionData, session: session });
+              }
+            }
+          } catch (err) {
+            console.error("Error checking request status:", err);
+          }
+        }, 3000);
+
+        setCheckingInterval(interval);
+
+        // Stop checking after 5 minutes
+        setTimeout(() => {
+          clearInterval(interval);
+        }, 5 * 60 * 1000);
+
       } else {
-        setMessage(data.error || "Action failed");
-        setLoading(false);
+        setMessage(data.error || "Failed to send request");
       }
     } catch (err) {
       console.error("Error:", err);
       setMessage("Network error");
+    } finally {
       setLoading(false);
     }
   };
@@ -76,9 +191,30 @@ export default function StudentActionVerification({
     switch (actionType) {
       case 'borrow': return 'Borrow Book';
       case 'return': return 'Return Book';
+      case 'pc_apply': return 'Apply for PC';
       case 'pc_reserve': return 'Reserve PC';
       case 'pc_release': return 'Release PC';
+      case 'pc_end': return 'End PC Session';
       default: return 'Action';
+    }
+  };
+
+  const getActionDescription = () => {
+    switch (actionType) {
+      case 'borrow':
+        return 'Your borrow request will be sent to the admin for approval. Please wait near the counter.';
+      case 'return':
+        return 'Your return request will be sent to the admin. Please bring the book to the counter.';
+      case 'pc_apply':
+        return 'Your PC application will be sent to the admin for approval.';
+      case 'pc_reserve':
+        return 'Your PC reservation request will be sent to the admin for approval.';
+      case 'pc_release':
+        return 'Your PC release request will be sent to the admin.';
+      case 'pc_end':
+        return 'End your current PC session.';
+      default:
+        return 'Your request will be sent to the admin for approval.';
     }
   };
 
@@ -103,12 +239,19 @@ export default function StudentActionVerification({
         width: '90%',
         textAlign: 'center'
       }}>
-        <div style={{ fontSize: "48px", marginBottom: "20px" }}>📷</div>
-        
-        <h2 style={{ marginTop: 0, marginBottom: "15px" }}>Verification Required</h2>
-        
+        <div style={{ fontSize: "48px", marginBottom: "20px" }}>
+          {requestSent ? "⏳" : "📋"}
+        </div>
+
+        <h2 style={{ marginTop: 0, marginBottom: "15px" }}>
+          {requestSent ? "Request Pending" : getActionText()}
+        </h2>
+
         <p style={{ color: "#666", marginBottom: "25px", fontSize: "14px" }}>
-          To {getActionText().toLowerCase()}, please have the admin scan your QR code or enter your student number for verification.
+          {requestSent
+            ? "Your request has been sent to the admin. Please wait for approval."
+            : getActionDescription()
+          }
         </p>
 
         <div style={{
@@ -120,94 +263,101 @@ export default function StudentActionVerification({
           <p style={{ margin: "0 0 10px 0", fontSize: "14px", color: "#1976d2" }}>
             <strong>Student:</strong> {user.name}
           </p>
-          <p style={{ margin: "0", fontSize: "14px", color: "#1976d2" }}>
+          <p style={{ margin: "0 0 10px 0", fontSize: "14px", color: "#1976d2" }}>
             <strong>ID:</strong> {user.studentNumber}
           </p>
-        </div>
-
-        <div style={{ marginBottom: "20px" }}>
-          <label style={{
-            display: "block",
-            marginBottom: "8px",
-            fontSize: "14px",
-            fontWeight: "600",
-            textAlign: "left"
-          }}>
-            Enter Student Number for Verification:
-          </label>
-          <input
-            type="text"
-            value={verificationCode}
-            onChange={(e) => setVerificationCode(e.target.value.replace(/[^0-9]/g, ''))}
-            placeholder="Enter your student number"
-            disabled={loading}
-            style={{
-              width: "100%",
-              padding: "12px",
-              border: "2px solid #ddd",
-              borderRadius: "8px",
-              fontSize: "16px",
-              boxSizing: "border-box",
-              textAlign: "center",
-              fontWeight: "600"
-            }}
-            onKeyPress={(e) => {
-              if (e.key === 'Enter' && !loading) {
-                handleVerify();
-              }
-            }}
-          />
+          <p style={{ margin: "0", fontSize: "14px", color: "#1976d2" }}>
+            <strong>Action:</strong> {getActionText()}
+          </p>
         </div>
 
         {message && (
           <div style={{
             padding: "12px",
-            backgroundColor: "#ffebee",
-            color: "#c62828",
+            backgroundColor: requestSent ? "#e8f5e9" : "#ffebee",
+            color: requestSent ? "#2e7d32" : "#c62828",
             borderRadius: "8px",
             marginBottom: "20px",
             fontSize: "14px"
           }}>
             {message}
+            {requestSent && (
+              <div style={{
+                marginTop: "10px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "8px"
+              }}>
+                <div style={{
+                  width: "16px",
+                  height: "16px",
+                  border: "3px solid #4caf50",
+                  borderTopColor: "transparent",
+                  borderRadius: "50%",
+                  animation: "spin 1s linear infinite"
+                }}></div>
+                <span style={{ fontSize: "12px", color: "#666" }}>Checking for approval...</span>
+              </div>
+            )}
           </div>
         )}
 
-        <div style={{ display: "flex", gap: "10px" }}>
+        {!requestSent ? (
+          <div style={{ display: "flex", gap: "10px" }}>
+            <button
+              onClick={onCancel}
+              disabled={loading}
+              style={{
+                flex: 1,
+                padding: "14px",
+                backgroundColor: "#f5f5f5",
+                color: "#333",
+                border: "2px solid #ddd",
+                borderRadius: "8px",
+                fontWeight: "600",
+                cursor: loading ? "not-allowed" : "pointer",
+                fontSize: "15px"
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSendRequest}
+              disabled={loading}
+              style={{
+                flex: 1,
+                padding: "14px",
+                backgroundColor: loading ? "#ccc" : "#4caf50",
+                color: "white",
+                border: "none",
+                borderRadius: "8px",
+                fontWeight: "600",
+                cursor: loading ? "not-allowed" : "pointer",
+                fontSize: "15px"
+              }}
+            >
+              {loading ? "Sending..." : "Send Request"}
+            </button>
+          </div>
+        ) : (
           <button
             onClick={onCancel}
-            disabled={loading}
             style={{
-              flex: 1,
+              width: "100%",
               padding: "14px",
               backgroundColor: "#f5f5f5",
               color: "#333",
               border: "2px solid #ddd",
               borderRadius: "8px",
               fontWeight: "600",
-              cursor: loading ? "not-allowed" : "pointer",
+              cursor: "pointer",
               fontSize: "15px"
             }}
           >
-            Cancel
+            Close
           </button>
-          <button
-            onClick={handleVerify}
-            disabled={loading || !verificationCode}
-            style={{
-              flex: 1,
-              padding: "14px",
-              backgroundColor: loading || !verificationCode ? "#ccc" : "#4caf50",
-              color: "white",
-              border: "none",
-              borderRadius: "8px",
-              fontWeight: "600",
-              cursor: loading || !verificationCode ? "not-allowed" : "pointer",
-              fontSize: "15px"
-            }}
-          >
-            {loading ? "Verifying..." : "Verify & Proceed"}
-          </button>
-        </div>
+        )}
 
         <div style={{
           marginTop: "20px",
@@ -218,8 +368,20 @@ export default function StudentActionVerification({
           color: "#e65100",
           textAlign: "left"
         }}>
-          <strong>💡 Note:</strong> In a real scenario, you would show your QR code to the admin who would scan it to approve this action. For testing, enter your student number.
+          <strong>How it works:</strong>
+          <ol style={{ margin: "8px 0 0 0", paddingLeft: "20px", lineHeight: "1.6" }}>
+            <li>Click "Send Request" to notify the admin</li>
+            <li>Go to the library counter with your student ID</li>
+            <li>Admin will verify and approve your request</li>
+            <li>This window will update automatically when approved</li>
+          </ol>
         </div>
+
+        <style>{`
+          @keyframes spin {
+            to { transform: rotate(360deg); }
+          }
+        `}</style>
       </div>
     </div>
   );

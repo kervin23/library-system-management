@@ -20,10 +20,18 @@ function authenticateToken(req, res, next) {
   });
 }
 
-// Middleware to check if user is admin
+// Middleware to check if user is admin or headadmin
 function isAdmin(req, res, next) {
-  if (req.user.role !== 'admin') {
+  if (req.user.role !== 'admin' && req.user.role !== 'headadmin') {
     return res.status(403).json({ error: "Admin access required" });
+  }
+  next();
+}
+
+// Middleware to check if user is headadmin only
+function isHeadAdmin(req, res, next) {
+  if (req.user.role !== 'headadmin') {
+    return res.status(403).json({ error: "Head Admin access required" });
   }
   next();
 }
@@ -31,5 +39,6 @@ function isAdmin(req, res, next) {
 module.exports = {
   authenticateToken,
   isAdmin,
+  isHeadAdmin,
   JWT_SECRET
 };

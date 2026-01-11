@@ -9,6 +9,8 @@ export default function AdminRequestsPanel() {
   const [verificationStudentNumber, setVerificationStudentNumber] = useState("");
   const [showVerification, setShowVerification] = useState(false);
   const [selectedRequest, setSelectedRequest] = useState(null);
+  const [successMessage, setSuccessMessage] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
 
   const getToken = () => localStorage.getItem("token");
 
@@ -41,8 +43,10 @@ export default function AdminRequestsPanel() {
   };
 
   const handleApprove = async () => {
+    setErrorMessage("");
+
     if (verificationStudentNumber !== selectedRequest.studentNumber) {
-      alert("Student number does not match!");
+      setErrorMessage("Student number does not match!");
       return;
     }
 
@@ -63,16 +67,17 @@ export default function AdminRequestsPanel() {
       const data = await response.json();
 
       if (response.ok) {
-        alert("Request approved successfully!");
+        setSuccessMessage("Request approved successfully!");
         setShowVerification(false);
         setSelectedRequest(null);
         loadRequests();
+        setTimeout(() => setSuccessMessage(""), 3000);
       } else {
-        alert(data.error || "Failed to approve request");
+        setErrorMessage(data.error || "Failed to approve request");
       }
     } catch (err) {
       console.error("Error approving request:", err);
-      alert("Network error");
+      setErrorMessage("Network error");
     } finally {
       setProcessingId(null);
     }
@@ -84,6 +89,7 @@ export default function AdminRequestsPanel() {
     }
 
     setProcessingId(id);
+    setErrorMessage("");
 
     try {
       const response = await fetch(`${API_URL}/requests/reject/${id}`, {
@@ -94,14 +100,17 @@ export default function AdminRequestsPanel() {
       const data = await response.json();
 
       if (response.ok) {
-        alert("Request rejected");
+        setSuccessMessage("Request rejected");
         loadRequests();
+        setTimeout(() => setSuccessMessage(""), 3000);
       } else {
-        alert(data.error || "Failed to reject request");
+        setErrorMessage(data.error || "Failed to reject request");
+        setTimeout(() => setErrorMessage(""), 5000);
       }
     } catch (err) {
       console.error("Error rejecting request:", err);
-      alert("Network error");
+      setErrorMessage("Network error");
+      setTimeout(() => setErrorMessage(""), 5000);
     } finally {
       setProcessingId(null);
     }
@@ -227,11 +236,25 @@ export default function AdminRequestsPanel() {
               />
             </div>
 
+            {errorMessage && (
+              <div style={{
+                padding: "12px",
+                backgroundColor: "#ffebee",
+                color: "#c62828",
+                borderRadius: "8px",
+                marginBottom: "15px",
+                fontSize: "14px"
+              }}>
+                {errorMessage}
+              </div>
+            )}
+
             <div style={{ display: "flex", gap: "10px" }}>
               <button
                 onClick={() => {
                   setShowVerification(false);
                   setSelectedRequest(null);
+                  setErrorMessage("");
                 }}
                 style={{
                   flex: 1,
@@ -266,6 +289,24 @@ export default function AdminRequestsPanel() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Success/Error Messages */}
+      {successMessage && (
+        <div style={{
+          padding: "15px",
+          backgroundColor: "#e8f5e9",
+          color: "#2e7d32",
+          borderRadius: "8px",
+          marginBottom: "20px",
+          fontSize: "14px",
+          fontWeight: "600",
+          display: "flex",
+          alignItems: "center",
+          gap: "10px"
+        }}>
+          <span>✓</span> {successMessage}
         </div>
       )}
 

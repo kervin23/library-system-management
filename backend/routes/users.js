@@ -85,55 +85,125 @@ router.get("/", authenticateToken, isAdmin, (req, res) => {
   });
 });
 
-// DELETE user by ID (Admin only)
+// GET all users with stats (Admin only)
+router.get("/with-stats", authenticateToken, isAdmin, (req, res) => {
+  const now = new Date().toISOString();
+
+  db.all(
+    `SELECT
+      u.id,
+      u.name,
+      u.email,
+      u.studentNumber,
+      u.role,
+      u.createdAt,
+      (SELECT COUNT(*) FROM borrowed_books WHERE userId = u.id AND status = 'borrowed') as borrowedCount,
+      (SELECT COUNT(*) FROM borrowed_books WHERE userId = u.id AND status = 'borrowed' AND dueDate < ?) as overdueCount,
+      (SELECT COUNT(*) FROM borrowed_books WHERE userId = u.id) as totalBorrows
+    FROM users u
+    ORDER BY u.name`,
+    [now],
+    (err, rows) => {
+      if (err) {
+        console.error("Error fetching users with stats:", err);
+        return res.status(500).json({ error: "Failed to fetch users" });
+      }
+      res.json(rows);
+    }
+  );
+});
+
+// Helper function to log admin transactions
+function logAdminTransaction(adminId, adminName, action, targetType, targetId, targetName, details) {
+  db.run(
+    `INSERT INTO admin_transactions (adminId, adminName, action, targetType, targetId, targetName, details)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [adminId, adminName, action, targetType, targetId, targetName, details],
+    (err) => {
+      if (err) console.error("Error logging admin transaction:", err);
+    }
+  );
+}
+
+// DELETE user by ID (Admin only, but cannot delete headadmin)
 router.delete("/:id", authenticateToken, isAdmin, (req, res) => {
   const { id } = req.params;
-  
+
   // Prevent deleting yourself
   if (parseInt(id) === req.user.id) {
     return res.status(400).json({ error: "You cannot delete your own account" });
   }
 
-  db.run("DELETE FROM users WHERE id = ?", [id], function (err) {
-    if (err) {
-      console.error("Error deleting user:", err);
-      return res.status(500).json({ error: "Failed to delete user" });
+  // Check if target is headadmin
+  db.get("SELECT * FROM users WHERE id = ?", [id], (err, user) => {
+    if (err) return res.status(500).json({ error: "Database error" });
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    if (user.role === 'headadmin') {
+      return res.status(403).json({ error: "Cannot delete Head Admin" });
     }
-    if (this.changes === 0) {
-      return res.status(404).json({ error: "User not found" });
-    }
-    res.json({ message: "User deleted successfully" });
+
+    db.run("DELETE FROM users WHERE id = ?", [id], function (err) {
+      if (err) {
+        console.error("Error deleting user:", err);
+        return res.status(500).json({ error: "Failed to delete user" });
+      }
+
+      // Log the transaction
+      logAdminTransaction(req.user.id, req.user.name, 'DELETE_USER', 'user', id, user.name, `Deleted user: ${user.name} (${user.studentNumber})`);
+
+      res.json({ message: "User deleted successfully" });
+    });
   });
 });
 
-// PROMOTE/DEMOTE user (Admin only)
-router.put("/:id/promote", authenticateToken, isAdmin, (req, res) => {
+// PROMOTE/DEMOTE user (Head Admin only)
+router.put("/:id/promote", authenticateToken, (req, res) => {
   const { id } = req.params;
   const { role } = req.body;
-  
+
+  // Only headadmin can promote/demote
+  if (req.user.role !== 'headadmin') {
+    return res.status(403).json({ error: "Only Head Admin can promote or demote users" });
+  }
+
   if (!role || (role !== 'admin' && role !== 'user')) {
     return res.status(400).json({ error: "Invalid role. Must be 'admin' or 'user'" });
   }
 
-  // Prevent demoting yourself
-  if (parseInt(id) === req.user.id && role === 'user') {
-    return res.status(400).json({ error: "You cannot demote yourself" });
-  }
-  
-  db.run(
-    "UPDATE users SET role = ? WHERE id = ?",
-    [role, id],
-    function (err) {
-      if (err) {
-        console.error("Error updating user role:", err);
-        return res.status(500).json({ error: "Failed to update user role" });
-      }
-      if (this.changes === 0) {
-        return res.status(404).json({ error: "User not found" });
-      }
-      res.json({ message: "User role updated successfully", role: role });
+  // Check target user
+  db.get("SELECT * FROM users WHERE id = ?", [id], (err, user) => {
+    if (err) return res.status(500).json({ error: "Database error" });
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    // Prevent demoting headadmin
+    if (user.role === 'headadmin') {
+      return res.status(403).json({ error: "Cannot change Head Admin role" });
     }
-  );
+
+    // Prevent demoting yourself
+    if (parseInt(id) === req.user.id && role === 'user') {
+      return res.status(400).json({ error: "You cannot demote yourself" });
+    }
+
+    const action = role === 'admin' ? 'PROMOTE_TO_ADMIN' : 'DEMOTE_TO_USER';
+
+    db.run(
+      "UPDATE users SET role = ? WHERE id = ?",
+      [role, id],
+      function (err) {
+        if (err) {
+          console.error("Error updating user role:", err);
+          return res.status(500).json({ error: "Failed to update user role" });
+        }
+
+        // Log the transaction
+        logAdminTransaction(req.user.id, req.user.name, action, 'user', id, user.name, `Changed ${user.name} role to ${role}`);
+
+        res.json({ message: "User role updated successfully", role: role });
+      }
+    );
+  });
 });
 
 // UPDATE user profile (Admin only)
@@ -232,7 +302,73 @@ router.get("/my-complete-history", authenticateToken, (req, res) => {
   });
 });
 
+// ========== ADMIN TRANSACTION HISTORY ROUTES ==========
+
+// Get my admin transactions (for current admin)
+router.get("/my-admin-history", authenticateToken, isAdmin, (req, res) => {
+  const adminId = req.user.id;
+
+  db.all(
+    `SELECT * FROM admin_transactions WHERE adminId = ? ORDER BY timestamp DESC LIMIT 100`,
+    [adminId],
+    (err, transactions) => {
+      if (err) {
+        console.error("Error fetching admin history:", err);
+        return res.status(500).json({ error: "Database error" });
+      }
+      res.json(transactions);
+    }
+  );
+});
+
+// Get all admin transactions (Head Admin only)
+router.get("/all-admin-history", authenticateToken, (req, res) => {
+  if (req.user.role !== 'headadmin') {
+    return res.status(403).json({ error: "Head Admin access required" });
+  }
+
+  db.all(
+    `SELECT * FROM admin_transactions ORDER BY timestamp DESC LIMIT 500`,
+    (err, transactions) => {
+      if (err) {
+        console.error("Error fetching all admin history:", err);
+        return res.status(500).json({ error: "Database error" });
+      }
+      res.json(transactions);
+    }
+  );
+});
+
+// Get transactions by specific admin (Head Admin only)
+router.get("/admin-history/:adminId", authenticateToken, (req, res) => {
+  if (req.user.role !== 'headadmin') {
+    return res.status(403).json({ error: "Head Admin access required" });
+  }
+
+  const { adminId } = req.params;
+
+  db.all(
+    `SELECT * FROM admin_transactions WHERE adminId = ? ORDER BY timestamp DESC LIMIT 100`,
+    [adminId],
+    (err, transactions) => {
+      if (err) {
+        console.error("Error fetching admin history:", err);
+        return res.status(500).json({ error: "Database error" });
+      }
+      res.json(transactions);
+    }
+  );
+});
+
 // ========== FORGOT PASSWORD ROUTES ==========
+
+// In-memory storage for reset codes (in production, use database or Redis)
+const resetCodes = new Map();
+
+// Generate a random 6-digit code
+function generateResetCode() {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
 
 // Check if student exists and return masked email
 router.post("/check-student", (req, res) => {
@@ -252,8 +388,8 @@ router.post("/check-student", (req, res) => {
   });
 });
 
-// Verify email matches
-router.post("/verify-email", (req, res) => {
+// Send reset code to email
+router.post("/send-reset-code", (req, res) => {
   const { studentNumber, email } = req.body;
 
   db.get(
@@ -263,38 +399,96 @@ router.post("/verify-email", (req, res) => {
       if (err) return res.status(500).json({ error: "Internal server error" });
       if (!user) return res.status(401).json({ error: "Email does not match" });
 
-      res.json({ message: "Email verified" });
+      // Generate reset code
+      const code = generateResetCode();
+
+      // Store code with expiration (10 minutes)
+      resetCodes.set(studentNumber, {
+        code: code,
+        email: email,
+        expiresAt: Date.now() + 10 * 60 * 1000 // 10 minutes
+      });
+
+      // Display code prominently in console for demo/presentation
+      console.log("\n");
+      console.log("╔════════════════════════════════════════════════════╗");
+      console.log("║           PASSWORD RESET CODE (DEV MODE)           ║");
+      console.log("╠════════════════════════════════════════════════════╣");
+      console.log(`║  Student Number: ${studentNumber.padEnd(34)}║`);
+      console.log(`║  Email: ${email.padEnd(43)}║`);
+      console.log(`║  Reset Code: ${code.padEnd(38)}║`);
+      console.log(`║  Expires in: 10 minutes                            ║`);
+      console.log("╚════════════════════════════════════════════════════╝");
+      console.log("\n");
+
+      // In production, you would use nodemailer to send the email
+      // For demo: check the backend console/terminal for the reset code
+      res.json({
+        message: "Reset code sent. Check backend console for the code."
+      });
     }
   );
 });
 
+// Verify reset code
+router.post("/verify-reset-code", (req, res) => {
+  const { studentNumber, code } = req.body;
+
+  const storedData = resetCodes.get(studentNumber);
+
+  if (!storedData) {
+    return res.status(400).json({ error: "No reset code found. Please request a new one." });
+  }
+
+  if (Date.now() > storedData.expiresAt) {
+    resetCodes.delete(studentNumber);
+    return res.status(400).json({ error: "Reset code has expired. Please request a new one." });
+  }
+
+  if (storedData.code !== code) {
+    return res.status(400).json({ error: "Invalid reset code" });
+  }
+
+  res.json({ message: "Code verified successfully" });
+});
+
 // Reset password
 router.post("/reset-password", (req, res) => {
-  const { studentNumber, email, newPassword } = req.body;
+  const { studentNumber, code, newPassword } = req.body;
 
-  // Verify student and email
-  db.get(
-    "SELECT * FROM users WHERE studentNumber = ? AND email = ?",
-    [studentNumber, email],
-    (err, user) => {
-      if (err) return res.status(500).json({ error: "Internal server error" });
-      if (!user) return res.status(401).json({ error: "Invalid credentials" });
+  // Verify the code is still valid
+  const storedData = resetCodes.get(studentNumber);
 
-      // Hash new password
-      const hashedPassword = bcrypt.hashSync(newPassword, 10);
+  if (!storedData) {
+    return res.status(400).json({ error: "No reset code found. Please start over." });
+  }
 
-      // Update password
-      db.run(
-        "UPDATE users SET password = ? WHERE studentNumber = ?",
-        [hashedPassword, studentNumber],
-        function (err) {
-          if (err) {
-            console.error("Error updating password:", err);
-            return res.status(500).json({ error: "Failed to reset password" });
-          }
-          res.json({ message: "Password reset successfully" });
-        }
-      );
+  if (Date.now() > storedData.expiresAt) {
+    resetCodes.delete(studentNumber);
+    return res.status(400).json({ error: "Reset code has expired. Please start over." });
+  }
+
+  if (storedData.code !== code) {
+    return res.status(400).json({ error: "Invalid reset code" });
+  }
+
+  // Hash new password
+  const hashedPassword = bcrypt.hashSync(newPassword, 10);
+
+  // Update password
+  db.run(
+    "UPDATE users SET password = ? WHERE studentNumber = ?",
+    [hashedPassword, studentNumber],
+    function (err) {
+      if (err) {
+        console.error("Error updating password:", err);
+        return res.status(500).json({ error: "Failed to reset password" });
+      }
+
+      // Clear the reset code
+      resetCodes.delete(studentNumber);
+
+      res.json({ message: "Password reset successfully" });
     }
   );
 });

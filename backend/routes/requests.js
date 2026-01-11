@@ -4,6 +4,66 @@ const { authenticateToken, isAdmin } = require("../middleware/auth");
 
 const router = express.Router();
 
+// Helper function to log admin transactions
+function logAdminTransaction(adminId, adminName, action, targetType, targetId, targetName, details) {
+  db.run(
+    `INSERT INTO admin_transactions (adminId, adminName, action, targetType, targetId, targetName, details)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [adminId, adminName, action, targetType, targetId, targetName, details],
+    (err) => {
+      if (err) console.error("Error logging admin transaction:", err);
+    }
+  );
+}
+
+// Helper function to check if student is checked in
+function isStudentCheckedIn(userId, callback) {
+  db.get(
+    `SELECT checkedIn FROM current_status WHERE userId = ?`,
+    [userId],
+    (err, status) => {
+      if (err) {
+        callback(err, false);
+        return;
+      }
+      callback(null, status && status.checkedIn === 1);
+    }
+  );
+}
+
+// Calculate due date: 24 hours, skip Thursdays and holidays
+async function calculateDueDate() {
+  return new Promise((resolve) => {
+    const dueDate = new Date();
+    dueDate.setHours(dueDate.getHours() + 24);
+
+    db.all("SELECT date FROM holidays", [], (err, holidays) => {
+      if (err) {
+        resolve(dueDate.toISOString());
+        return;
+      }
+
+      const holidayDates = holidays.map(h => h.date);
+      let adjustedDate = new Date(dueDate);
+      let maxIterations = 30;
+
+      while (maxIterations > 0) {
+        const dayOfWeek = adjustedDate.getDay();
+        const dateStr = adjustedDate.toISOString().split('T')[0];
+
+        if (dayOfWeek === 4 || holidayDates.includes(dateStr)) {
+          adjustedDate.setDate(adjustedDate.getDate() + 1);
+          maxIterations--;
+        } else {
+          break;
+        }
+      }
+
+      resolve(adjustedDate.toISOString());
+    });
+  });
+}
+
 // Create pending request (student side)
 router.post("/create", authenticateToken, (req, res) => {
   const { type, bookId, bookTitle, pcNumber, pcName, transactionId } = req.body;
@@ -11,50 +71,63 @@ router.post("/create", authenticateToken, (req, res) => {
   const studentNumber = req.user.studentNumber;
   const studentName = req.user.name;
 
-  // Check if user already has a pending request
-  db.get(
-    `SELECT * FROM pending_requests WHERE userId = ? AND status = 'pending'`,
-    [userId],
-    (err, existing) => {
-      if (err) {
-        return res.status(500).json({ error: "Database error" });
-      }
-      
-      if (existing) {
-        return res.status(400).json({ 
-          error: "You already have a pending request. Please wait for admin approval." 
-        });
-      }
+  // Check if student is checked in
+  isStudentCheckedIn(userId, (err, checkedIn) => {
+    if (err) {
+      return res.status(500).json({ error: "Database error" });
+    }
 
-      // Create the request
-      db.run(
-        `INSERT INTO pending_requests 
-         (userId, studentNumber, studentName, type, bookId, bookTitle, pcNumber, pcName, transactionId, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
-        [userId, studentNumber, studentName, type, bookId || null, bookTitle || null, 
-         pcNumber || null, pcName || null, transactionId || null],
-        function(err) {
-          if (err) {
-            console.error("Error creating request:", err);
-            return res.status(500).json({ error: "Failed to create request" });
-          }
-          
-          res.json({ 
-            message: "Request created successfully",
-            requestId: this.lastID,
-            studentNumber: studentNumber
+    if (!checkedIn) {
+      return res.status(403).json({
+        error: "You must be checked in to the library to make requests. Please check in first."
+      });
+    }
+
+    // Check if user already has a pending request
+    db.get(
+      `SELECT * FROM pending_requests WHERE userId = ? AND status = 'pending'`,
+      [userId],
+      (err, existing) => {
+        if (err) {
+          return res.status(500).json({ error: "Database error" });
+        }
+
+        if (existing) {
+          return res.status(400).json({
+            error: "You already have a pending request. Please wait for admin approval."
           });
         }
-      );
-    }
-  );
+
+        // Create the request
+        db.run(
+          `INSERT INTO pending_requests
+           (userId, studentNumber, studentName, type, bookId, bookTitle, pcNumber, pcName, transactionId, status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+          [userId, studentNumber, studentName, type, bookId || null, bookTitle || null,
+           pcNumber || null, pcName || null, transactionId || null],
+          function(err) {
+            if (err) {
+              console.error("Error creating request:", err);
+              return res.status(500).json({ error: "Failed to create request" });
+            }
+
+            res.json({
+              message: "Request created successfully",
+              requestId: this.lastID,
+              studentNumber: studentNumber
+            });
+          }
+        );
+      }
+    );
+  });
 });
 
 // Get all pending requests (admin only)
 router.get("/pending", authenticateToken, isAdmin, (req, res) => {
   db.all(
-    `SELECT * FROM pending_requests 
-     WHERE status = 'pending' 
+    `SELECT * FROM pending_requests
+     WHERE status = 'pending'
      ORDER BY createdAt DESC`,
     (err, requests) => {
       if (err) {
@@ -66,15 +139,17 @@ router.get("/pending", authenticateToken, isAdmin, (req, res) => {
 });
 
 // Approve request (admin only)
-router.post("/approve/:id", authenticateToken, isAdmin, (req, res) => {
+router.post("/approve/:id", authenticateToken, isAdmin, async (req, res) => {
   const { id } = req.params;
   const { verifiedStudentNumber } = req.body;
+  const adminId = req.user.id;
+  const adminName = req.user.name;
 
   // Get the request
   db.get(
     `SELECT * FROM pending_requests WHERE id = ?`,
     [id],
-    (err, request) => {
+    async (err, request) => {
       if (err) {
         return res.status(500).json({ error: "Database error" });
       }
@@ -93,22 +168,18 @@ router.post("/approve/:id", authenticateToken, isAdmin, (req, res) => {
       // Process based on request type
       if (request.type === 'borrow_book') {
         // Check book availability
-        db.get("SELECT * FROM books WHERE id = ?", [request.bookId], (err, book) => {
+        db.get("SELECT * FROM books WHERE id = ?", [request.bookId], async (err, book) => {
           if (err || !book || book.available < 1) {
             return res.status(400).json({ error: "Book not available" });
           }
 
-          // Calculate due date
-          const now = new Date();
-          const dayOfWeek = now.getDay();
-          let daysToAdd = (dayOfWeek >= 1 && dayOfWeek <= 3) ? 2 : (dayOfWeek === 4 ? 4 : 2);
-          const dueDate = new Date(now);
-          dueDate.setDate(dueDate.getDate() + daysToAdd);
+          // Calculate due date (24h, skip Thursdays and holidays)
+          const dueDate = await calculateDueDate();
 
-          // Create borrow record
+          // Create borrow record with approvedBy
           db.run(
-            `INSERT INTO borrowed_books (userId, bookId, dueDate) VALUES (?, ?, ?)`,
-            [request.userId, request.bookId, dueDate.toISOString()],
+            `INSERT INTO borrowed_books (userId, bookId, dueDate, approvedBy) VALUES (?, ?, ?, ?)`,
+            [request.userId, request.bookId, dueDate, adminId],
             function(err) {
               if (err) {
                 return res.status(500).json({ error: "Failed to borrow book" });
@@ -119,13 +190,18 @@ router.post("/approve/:id", authenticateToken, isAdmin, (req, res) => {
 
               // Mark request as approved
               db.run(
-                `UPDATE pending_requests SET status = 'approved', approvedAt = datetime('now') WHERE id = ?`,
-                [id],
+                `UPDATE pending_requests SET status = 'approved', approvedAt = datetime('now'), approvedBy = ? WHERE id = ?`,
+                [adminId, id],
                 (err) => {
                   if (err) {
                     return res.status(500).json({ error: "Failed to update request" });
                   }
-                  res.json({ message: "Book borrowed successfully", dueDate: dueDate.toISOString() });
+
+                  // Log admin transaction
+                  logAdminTransaction(adminId, adminName, 'APPROVE_BORROW', 'book', request.bookId,
+                    request.bookTitle, `Approved borrow for ${request.studentName} (${request.studentNumber})`);
+
+                  res.json({ message: "Book borrowed successfully", dueDate: dueDate });
                 }
               );
             }
@@ -157,12 +233,17 @@ router.post("/approve/:id", authenticateToken, isAdmin, (req, res) => {
 
                 // Mark request as approved
                 db.run(
-                  `UPDATE pending_requests SET status = 'approved', approvedAt = datetime('now') WHERE id = ?`,
-                  [id],
+                  `UPDATE pending_requests SET status = 'approved', approvedAt = datetime('now'), approvedBy = ? WHERE id = ?`,
+                  [adminId, id],
                   (err) => {
                     if (err) {
                       return res.status(500).json({ error: "Failed to update request" });
                     }
+
+                    // Log admin transaction
+                    logAdminTransaction(adminId, adminName, 'APPROVE_RETURN', 'book', request.bookId,
+                      request.bookTitle, `Approved return for ${request.studentName} (${request.studentNumber})`);
+
                     res.json({ message: "Book returned successfully" });
                   }
                 );
@@ -194,13 +275,18 @@ router.post("/approve/:id", authenticateToken, isAdmin, (req, res) => {
 
                 // Mark request as approved
                 db.run(
-                  `UPDATE pending_requests SET status = 'approved', approvedAt = datetime('now') WHERE id = ?`,
-                  [id],
+                  `UPDATE pending_requests SET status = 'approved', approvedAt = datetime('now'), approvedBy = ? WHERE id = ?`,
+                  [adminId, id],
                   (err) => {
                     if (err) {
                       return res.status(500).json({ error: "Failed to update request" });
                     }
-                    res.json({ 
+
+                    // Log admin transaction
+                    logAdminTransaction(adminId, adminName, 'APPROVE_PC_RESERVE', 'pc', request.pcNumber,
+                      `PC-${request.pcNumber}`, `Approved PC reservation for ${request.studentName} (${request.studentNumber})`);
+
+                    res.json({
                       message: occupied ? "PC reserved successfully" : "PC applied successfully",
                       pcNumber: request.pcNumber
                     });
@@ -210,7 +296,36 @@ router.post("/approve/:id", authenticateToken, isAdmin, (req, res) => {
             );
           }
         );
+      } else {
+        // Unknown request type
+        return res.status(400).json({ error: "Unknown request type" });
       }
+    }
+  );
+});
+
+// Get pending requests count
+router.get("/pending-count", authenticateToken, isAdmin, (req, res) => {
+  db.get(
+    `SELECT COUNT(*) as count FROM pending_requests WHERE status = 'pending'`,
+    (err, result) => {
+      if (err) {
+        return res.status(500).json({ error: "Database error" });
+      }
+      res.json({ count: result.count || 0 });
+    }
+  );
+});
+
+// Clean up unknown/invalid request types (admin only)
+router.delete("/cleanup-invalid", authenticateToken, isAdmin, (req, res) => {
+  db.run(
+    `DELETE FROM pending_requests WHERE type NOT IN ('borrow_book', 'return_book', 'reserve_pc') AND status = 'pending'`,
+    function(err) {
+      if (err) {
+        return res.status(500).json({ error: "Database error" });
+      }
+      res.json({ message: `Cleaned up ${this.changes} invalid requests` });
     }
   );
 });
@@ -218,20 +333,48 @@ router.post("/approve/:id", authenticateToken, isAdmin, (req, res) => {
 // Reject request (admin only)
 router.post("/reject/:id", authenticateToken, isAdmin, (req, res) => {
   const { id } = req.params;
+  const adminId = req.user.id;
+  const adminName = req.user.name;
 
-  db.run(
-    `UPDATE pending_requests SET status = 'rejected', approvedAt = datetime('now') WHERE id = ?`,
-    [id],
-    function(err) {
-      if (err) {
-        return res.status(500).json({ error: "Database error" });
-      }
-      if (this.changes === 0) {
-        return res.status(404).json({ error: "Request not found" });
-      }
-      res.json({ message: "Request rejected" });
+  db.get(`SELECT * FROM pending_requests WHERE id = ?`, [id], (err, request) => {
+    if (err) {
+      return res.status(500).json({ error: "Database error" });
     }
-  );
+    if (!request) {
+      return res.status(404).json({ error: "Request not found" });
+    }
+
+    db.run(
+      `UPDATE pending_requests SET status = 'rejected', approvedAt = datetime('now'), approvedBy = ? WHERE id = ?`,
+      [adminId, id],
+      function(err) {
+        if (err) {
+          return res.status(500).json({ error: "Database error" });
+        }
+        if (this.changes === 0) {
+          return res.status(404).json({ error: "Request not found" });
+        }
+
+        // Log admin transaction
+        logAdminTransaction(adminId, adminName, 'REJECT_REQUEST', request.type, request.bookId || request.pcNumber,
+          request.bookTitle || `PC-${request.pcNumber}`, `Rejected ${request.type} request from ${request.studentName}`);
+
+        res.json({ message: "Request rejected" });
+      }
+    );
+  });
+});
+
+// Check student check-in status endpoint
+router.get("/check-status", authenticateToken, (req, res) => {
+  const userId = req.user.id;
+
+  isStudentCheckedIn(userId, (err, checkedIn) => {
+    if (err) {
+      return res.status(500).json({ error: "Database error" });
+    }
+    res.json({ checkedIn });
+  });
 });
 
 module.exports = router;

@@ -148,6 +148,22 @@ export default function QRScanner() {
         Smart toggle: automatically checks in or out based on current status
       </p>
 
+      {/* HTTPS Warning for camera */}
+      {window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && (
+        <div style={{
+          padding: "15px",
+          backgroundColor: "#fff3e0",
+          border: "1px solid #ff9800",
+          borderRadius: "8px",
+          marginBottom: "20px",
+          fontSize: "14px",
+          color: "#e65100"
+        }}>
+          <strong>Camera Access Issue:</strong> Camera requires HTTPS on non-localhost.
+          Please access via <strong>https://{window.location.host}</strong> or use Manual Entry below.
+        </div>
+      )}
+
       {/* Scan Mode Toggle */}
       <div style={{
         display: "flex",

@@ -4,26 +4,55 @@ const { authenticateToken, isAdmin } = require("../middleware/auth");
 
 const router = express.Router();
 
-// Calculate due date based on borrow day
-function calculateDueDate() {
-  const now = new Date();
-  const dayOfWeek = now.getDay(); // 0=Sunday, 1=Monday, etc.
-  
-  let daysToAdd;
-  if (dayOfWeek >= 1 && dayOfWeek <= 3) {
-    // Monday to Wednesday: 2 days
-    daysToAdd = 2;
-  } else if (dayOfWeek === 4) {
-    // Thursday: 4 days (until Monday)
-    daysToAdd = 4;
-  } else {
-    // Friday/Weekend: default to 2 days
-    daysToAdd = 2;
+// Calculate due date: 24 hours, skip Thursdays and holidays
+async function calculateDueDate() {
+  return new Promise((resolve, reject) => {
+    // Start with 24 hours from now
+    const dueDate = new Date();
+    dueDate.setHours(dueDate.getHours() + 24);
+
+    // Get all holidays from database
+    db.all("SELECT date FROM holidays", [], (err, holidays) => {
+      if (err) {
+        console.error("Error fetching holidays:", err);
+        // If error, just return 24h without holiday check
+        resolve(adjustForThursday(dueDate).toISOString());
+        return;
+      }
+
+      const holidayDates = holidays.map(h => h.date);
+
+      // Adjust due date to skip Thursdays and holidays
+      let adjustedDate = new Date(dueDate);
+      let maxIterations = 30; // Prevent infinite loop
+
+      while (maxIterations > 0) {
+        const dayOfWeek = adjustedDate.getDay();
+        const dateStr = adjustedDate.toISOString().split('T')[0]; // YYYY-MM-DD format
+
+        // Check if Thursday (4) or a holiday
+        if (dayOfWeek === 4 || holidayDates.includes(dateStr)) {
+          // Move to next day
+          adjustedDate.setDate(adjustedDate.getDate() + 1);
+          maxIterations--;
+        } else {
+          break;
+        }
+      }
+
+      resolve(adjustedDate.toISOString());
+    });
+  });
+}
+
+// Helper function to adjust for Thursday only (sync version for fallback)
+function adjustForThursday(date) {
+  const adjustedDate = new Date(date);
+  // If Thursday (4), move to Friday
+  if (adjustedDate.getDay() === 4) {
+    adjustedDate.setDate(adjustedDate.getDate() + 1);
   }
-  
-  const dueDate = new Date(now);
-  dueDate.setDate(dueDate.getDate() + daysToAdd);
-  return dueDate.toISOString();
+  return adjustedDate;
 }
 
 // Get all books
@@ -54,22 +83,22 @@ router.post("/", authenticateToken, isAdmin, (req, res) => {
 });
 
 // Borrow book
-router.post("/borrow", authenticateToken, (req, res) => {
+router.post("/borrow", authenticateToken, async (req, res) => {
   const { bookId } = req.body;
   const userId = req.user.id;
 
   // Check if user already has 2 books
   db.get(
-    `SELECT COUNT(*) as count FROM borrowed_books 
+    `SELECT COUNT(*) as count FROM borrowed_books
      WHERE userId = ? AND status = 'borrowed'`,
     [userId],
-    (err, result) => {
+    async (err, result) => {
       if (err) {
         return res.status(500).json({ error: "Database error" });
       }
-      
+
       if (result.count >= 2) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           error: "You can only borrow 2 books at a time",
           current: result.count,
           max: 2
@@ -77,7 +106,7 @@ router.post("/borrow", authenticateToken, (req, res) => {
       }
 
       // Check if book is available
-      db.get("SELECT * FROM books WHERE id = ?", [bookId], (err, book) => {
+      db.get("SELECT * FROM books WHERE id = ?", [bookId], async (err, book) => {
         if (err) {
           return res.status(500).json({ error: "Database error" });
         }
@@ -88,7 +117,8 @@ router.post("/borrow", authenticateToken, (req, res) => {
           return res.status(400).json({ error: "Book not available" });
         }
 
-        const dueDate = calculateDueDate();
+        // Calculate due date (24h, skipping Thursdays and holidays)
+        const dueDate = await calculateDueDate();
 
         // Create borrow record
         db.run(
@@ -288,7 +318,7 @@ router.get("/my-history", authenticateToken, (req, res) => {
 
   // Get all borrow/return activities
   db.all(
-    `SELECT 
+    `SELECT
       id,
       bookId,
       borrowDate as timestamp,
@@ -297,7 +327,7 @@ router.get("/my-history", authenticateToken, (req, res) => {
      FROM borrowed_books
      WHERE userId = ?
      UNION ALL
-     SELECT 
+     SELECT
       id,
       bookId,
       returnDate as timestamp,
@@ -313,6 +343,102 @@ router.get("/my-history", authenticateToken, (req, res) => {
         return res.status(500).json({ error: "Database error" });
       }
       res.json(history);
+    }
+  );
+});
+
+// Get complete history for admin (all borrow/return activities)
+router.get("/admin-history", authenticateToken, isAdmin, (req, res) => {
+  db.all(
+    `SELECT
+      bb.id,
+      bb.bookId,
+      bb.userId,
+      bb.borrowDate,
+      bb.dueDate,
+      bb.returnDate,
+      bb.status,
+      b.title as bookTitle,
+      b.author as bookAuthor,
+      u.name as studentName,
+      u.studentNumber,
+      CASE
+        WHEN bb.status = 'borrowed' AND bb.dueDate < datetime('now') THEN 1
+        ELSE 0
+      END as isOverdue
+     FROM borrowed_books bb
+     JOIN books b ON bb.bookId = b.id
+     JOIN users u ON bb.userId = u.id
+     ORDER BY bb.borrowDate DESC
+     LIMIT 500`,
+    (err, history) => {
+      if (err) {
+        return res.status(500).json({ error: "Database error" });
+      }
+      res.json(history);
+    }
+  );
+});
+
+// Update book (admin only)
+router.put("/:id", authenticateToken, isAdmin, (req, res) => {
+  const { id } = req.params;
+  const { title, author, isbn, totalCopies, imageUrl } = req.body;
+
+  // First get the current book to calculate available copies
+  db.get("SELECT * FROM books WHERE id = ?", [id], (err, book) => {
+    if (err) {
+      return res.status(500).json({ error: "Database error" });
+    }
+    if (!book) {
+      return res.status(404).json({ error: "Book not found" });
+    }
+
+    // Calculate new available copies
+    const borrowedCopies = book.totalCopies - book.available;
+    const newAvailable = Math.max(0, totalCopies - borrowedCopies);
+
+    db.run(
+      `UPDATE books SET title = ?, author = ?, isbn = ?, totalCopies = ?, available = ?, imageUrl = ? WHERE id = ?`,
+      [title, author, isbn, totalCopies, newAvailable, imageUrl || null, id],
+      function(err) {
+        if (err) {
+          return res.status(500).json({ error: "Failed to update book" });
+        }
+        if (this.changes === 0) {
+          return res.status(404).json({ error: "Book not found" });
+        }
+        res.json({ message: "Book updated successfully" });
+      }
+    );
+  });
+});
+
+// Delete book (admin only)
+router.delete("/:id", authenticateToken, isAdmin, (req, res) => {
+  const { id } = req.params;
+
+  // Check if book has any active borrows
+  db.get(
+    "SELECT COUNT(*) as count FROM borrowed_books WHERE bookId = ? AND status = 'borrowed'",
+    [id],
+    (err, result) => {
+      if (err) {
+        return res.status(500).json({ error: "Database error" });
+      }
+      if (result.count > 0) {
+        return res.status(400).json({ error: "Cannot delete book with active borrows" });
+      }
+
+      db.run("DELETE FROM books WHERE id = ?", [id], function(err) {
+        if (err) {
+          return res.status(500).json({ error: "Failed to delete book" });
+        }
+        if (this.changes === 0) {
+          return res.status(404).json({ error: "Book not found" });
+        }
+        res.json({ message: "Book deleted successfully" });
+      });
     }
   );
 });

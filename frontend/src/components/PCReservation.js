@@ -80,7 +80,7 @@ export default function PCReservationRedesigned() {
           data: sortedPCs[0].pcNumber
         });
       } else {
-        alert("No PCs available at the moment");
+        // No PCs available - do nothing
         return;
       }
     }
@@ -117,15 +117,6 @@ export default function PCReservationRedesigned() {
   const handleVerificationSuccess = (data) => {
     setShowVerification(false);
     setVerificationAction(null);
-    
-    if (verificationAction.type === 'pc_apply') {
-      alert(`Computer ${verificationAction.data} applied successfully! You have 1 hour.`);
-    } else if (verificationAction.type === 'pc_reserve') {
-      alert(`Computer ${verificationAction.data} reserved! You'll be notified when available.`);
-    } else if (verificationAction.type === 'pc_end') {
-      alert("Session ended successfully!");
-    }
-    
     loadPCs();
     loadMySession();
   };
