@@ -3,15 +3,161 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const db = require("../db");
 const { authenticateToken, isAdmin, JWT_SECRET } = require("../middleware/auth");
+const { sendResetCode, sendWelcomeEmail, sendVerificationCode } = require("../utils/emailService");
 
 const router = express.Router();
 
-// REGISTER (Students only)
+// Email domain restriction
+const ALLOWED_EMAIL_DOMAIN = "@cvsu.edu.ph";
+
+// In-memory storage for email verification codes
+const emailVerificationCodes = new Map();
+
+// Generate a random 6-digit code
+function generateVerificationCode() {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+// ========== EMAIL VERIFICATION FOR SIGNUP ==========
+
+// Send verification code to email before registration
+router.post("/send-verification-code", async (req, res) => {
+  const email = req.body.email ? req.body.email.trim().toLowerCase() : null;
+
+  if (!email) {
+    return res.status(400).json({ error: "Email is required" });
+  }
+
+  // Validate email domain
+  if (!email.endsWith(ALLOWED_EMAIL_DOMAIN)) {
+    return res.status(400).json({
+      error: `Only ${ALLOWED_EMAIL_DOMAIN} email addresses are allowed`
+    });
+  }
+
+  // Check if email already exists
+  db.get("SELECT * FROM users WHERE LOWER(email) = LOWER(?)", [email], async (err, existingUser) => {
+    if (err) {
+      return res.status(500).json({ error: "Database error" });
+    }
+
+    if (existingUser) {
+      return res.status(400).json({ error: "This email is already registered" });
+    }
+
+    // Generate verification code
+    const code = generateVerificationCode();
+
+    // Store code with expiration (10 minutes)
+    emailVerificationCodes.set(email.toLowerCase(), {
+      code: code,
+      expiresAt: Date.now() + 10 * 60 * 1000 // 10 minutes
+    });
+
+    // Display code in console (backup)
+    console.log("\n");
+    console.log("╔════════════════════════════════════════════════════╗");
+    console.log("║         EMAIL VERIFICATION CODE (SIGNUP)           ║");
+    console.log("╠════════════════════════════════════════════════════╣");
+    console.log(`║  Email: ${email.padEnd(43)}║`);
+    console.log(`║  Verification Code: ${code.padEnd(31)}║`);
+    console.log(`║  Expires in: 10 minutes                            ║`);
+    console.log("╚════════════════════════════════════════════════════╝");
+    console.log("\n");
+
+    // Send email
+    try {
+      const emailResult = await sendVerificationCode(email, code);
+
+      if (emailResult.success) {
+        res.json({ message: "Verification code sent to your email" });
+      } else {
+        console.log("Email sending failed, code shown in console above");
+        res.json({ message: "Verification code generated. Check backend console if email not received." });
+      }
+    } catch (emailErr) {
+      console.error("Email error:", emailErr);
+      res.json({ message: "Verification code generated. Check backend console if email not received." });
+    }
+  });
+});
+
+// Verify email code before allowing registration
+router.post("/verify-email-code", (req, res) => {
+  const email = req.body.email ? req.body.email.trim().toLowerCase() : null;
+  const code = req.body.code ? req.body.code.trim() : null;
+
+  if (!email || !code) {
+    return res.status(400).json({ error: "Email and code are required" });
+  }
+
+  console.log("[VERIFY] Checking code for email:", email);
+  console.log("[VERIFY] Stored emails:", Array.from(emailVerificationCodes.keys()));
+
+  const storedData = emailVerificationCodes.get(email);
+
+  if (!storedData) {
+    return res.status(400).json({ error: "No verification code found. Please request a new one." });
+  }
+
+  if (Date.now() > storedData.expiresAt) {
+    emailVerificationCodes.delete(email);
+    return res.status(400).json({ error: "Verification code has expired. Please request a new one." });
+  }
+
+  if (storedData.code !== code) {
+    return res.status(400).json({ error: "Invalid verification code" });
+  }
+
+  // Mark as verified (keep for 30 minutes to allow registration)
+  emailVerificationCodes.set(email, {
+    ...storedData,
+    verified: true,
+    expiresAt: Date.now() + 30 * 60 * 1000 // Extend for 30 minutes
+  });
+
+  console.log("[VERIFY] Email verified successfully:", email);
+  console.log("[VERIFY] Verification data:", emailVerificationCodes.get(email));
+
+  res.json({ message: "Email verified successfully", verified: true });
+});
+
+// REGISTER (Students only - requires email verification)
 router.post("/register", (req, res) => {
-  const { name, email, studentNumber, password } = req.body;
+  const { name, studentNumber, password } = req.body;
+  const email = req.body.email ? req.body.email.trim().toLowerCase() : null;
 
   if (!name || !email || !studentNumber || !password) {
     return res.status(400).json({ error: "All fields are required" });
+  }
+
+  // Validate email domain
+  if (!email.endsWith(ALLOWED_EMAIL_DOMAIN)) {
+    return res.status(400).json({
+      error: `Only ${ALLOWED_EMAIL_DOMAIN} email addresses are allowed`
+    });
+  }
+
+  // Debug logging
+  console.log("[REGISTER] Attempting registration for email:", email);
+  console.log("[REGISTER] Stored verification emails:", Array.from(emailVerificationCodes.keys()));
+
+  // Check if email was verified
+  const verificationData = emailVerificationCodes.get(email);
+  console.log("[REGISTER] Verification data:", verificationData);
+
+  if (!verificationData || !verificationData.verified) {
+    return res.status(400).json({
+      error: "Please verify your email first before registering"
+    });
+  }
+
+  // Check if verification has expired
+  if (Date.now() > verificationData.expiresAt) {
+    emailVerificationCodes.delete(email);
+    return res.status(400).json({
+      error: "Email verification has expired. Please verify your email again."
+    });
   }
 
   const hashedPassword = bcrypt.hashSync(password, 10);
@@ -20,11 +166,23 @@ router.post("/register", (req, res) => {
     `INSERT INTO users (name, email, studentNumber, password, role)
      VALUES (?, ?, ?, ?, ?)`,
     [name, email, studentNumber, hashedPassword, "user"],
-    function (err) {
+    async function (err) {
       if (err) {
         console.error("Error registering user:", err);
         return res.status(500).json({ error: "User registration failed. Email or student number may already exist." });
       }
+
+      // Clear the verification code after successful registration
+      emailVerificationCodes.delete(email);
+      console.log("[REGISTER] Registration successful for:", email);
+
+      // Send welcome email (optional - won't block registration if it fails)
+      try {
+        await sendWelcomeEmail(email, name);
+      } catch (emailErr) {
+        console.log("Welcome email not sent (email service may not be configured)");
+      }
+
       res.json({ message: "User registered successfully", userId: this.lastID });
     }
   );
@@ -393,9 +551,9 @@ router.post("/send-reset-code", (req, res) => {
   const { studentNumber, email } = req.body;
 
   db.get(
-    "SELECT * FROM users WHERE studentNumber = ? AND email = ?",
+    "SELECT * FROM users WHERE studentNumber = ? AND LOWER(email) = LOWER(?)",
     [studentNumber, email],
-    (err, user) => {
+    async (err, user) => {
       if (err) return res.status(500).json({ error: "Internal server error" });
       if (!user) return res.status(401).json({ error: "Email does not match" });
 
@@ -409,10 +567,10 @@ router.post("/send-reset-code", (req, res) => {
         expiresAt: Date.now() + 10 * 60 * 1000 // 10 minutes
       });
 
-      // Display code prominently in console for demo/presentation
+      // Display code in console (for backup/debugging)
       console.log("\n");
       console.log("╔════════════════════════════════════════════════════╗");
-      console.log("║           PASSWORD RESET CODE (DEV MODE)           ║");
+      console.log("║              PASSWORD RESET CODE                   ║");
       console.log("╠════════════════════════════════════════════════════╣");
       console.log(`║  Student Number: ${studentNumber.padEnd(34)}║`);
       console.log(`║  Email: ${email.padEnd(43)}║`);
@@ -421,11 +579,28 @@ router.post("/send-reset-code", (req, res) => {
       console.log("╚════════════════════════════════════════════════════╝");
       console.log("\n");
 
-      // In production, you would use nodemailer to send the email
-      // For demo: check the backend console/terminal for the reset code
-      res.json({
-        message: "Reset code sent. Check backend console for the code."
-      });
+      // Send email via nodemailer
+      try {
+        const emailResult = await sendResetCode(email, studentNumber, code);
+
+        if (emailResult.success) {
+          res.json({
+            message: "Reset code sent to your email address"
+          });
+        } else {
+          // Email failed but code is still valid - show in console
+          console.log("Email sending failed, code shown in console above");
+          res.json({
+            message: "Reset code generated. Check backend console if email not received."
+          });
+        }
+      } catch (emailErr) {
+        console.error("Email error:", emailErr);
+        // Still return success since code is generated
+        res.json({
+          message: "Reset code generated. Check backend console if email not received."
+        });
+      }
     }
   );
 });
