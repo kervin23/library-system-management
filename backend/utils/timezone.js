@@ -1,45 +1,39 @@
-// Timezone helper for Philippine Standard Time (UTC+8)
+// Timezone helper - uses server's local time
+// If your server is in Philippines, this will automatically be Philippine time
 
-// Get current Philippine time as a Date object
-function getPhilippineTime() {
-  // Create date string in Philippine timezone
+// Get current local time as a formatted string (no Z suffix)
+// Format: YYYY-MM-DDTHH:MM:SS
+function getLocalISOString() {
   const now = new Date();
-  const phTimeString = now.toLocaleString('en-US', { timeZone: 'Asia/Manila' });
-  return new Date(phTimeString);
-}
-
-// Get Philippine time as a local datetime string (no timezone suffix)
-// Format: YYYY-MM-DDTHH:MM:SS (without Z)
-function getPhilippineISOString() {
-  const ph = getPhilippineTime();
-  const year = ph.getFullYear();
-  const month = String(ph.getMonth() + 1).padStart(2, '0');
-  const day = String(ph.getDate()).padStart(2, '0');
-  const hours = String(ph.getHours()).padStart(2, '0');
-  const minutes = String(ph.getMinutes()).padStart(2, '0');
-  const seconds = String(ph.getSeconds()).padStart(2, '0');
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  const seconds = String(now.getSeconds()).padStart(2, '0');
 
   return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
 }
 
-// Get Philippine time formatted for SQLite datetime
-// Format: YYYY-MM-DD HH:MM:SS
-function getPhilippineDateTimeString() {
-  const ph = getPhilippineTime();
-  const year = ph.getFullYear();
-  const month = String(ph.getMonth() + 1).padStart(2, '0');
-  const day = String(ph.getDate()).padStart(2, '0');
-  const hours = String(ph.getHours()).padStart(2, '0');
-  const minutes = String(ph.getMinutes()).padStart(2, '0');
-  const seconds = String(ph.getSeconds()).padStart(2, '0');
-
-  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+// Alias for backward compatibility
+function getPhilippineISOString() {
+  return getLocalISOString();
 }
 
-// Calculate due date in Philippine time (24 hours from now, skip Thursdays and holidays)
+// Get local time as Date object
+function getLocalTime() {
+  return new Date();
+}
+
+// Alias for backward compatibility
+function getPhilippineTime() {
+  return getLocalTime();
+}
+
+// Calculate due date: 24 hours from now, skip Thursdays and holidays
 async function calculateDueDatePH(db) {
   return new Promise((resolve) => {
-    const now = getPhilippineTime();
+    const now = new Date();
     const dueDate = new Date(now.getTime() + (24 * 60 * 60 * 1000)); // 24 hours later
 
     db.all("SELECT date FROM holidays", [], (err, holidays) => {
@@ -70,7 +64,7 @@ async function calculateDueDatePH(db) {
   });
 }
 
-// Helper: Format date for storage (YYYY-MM-DDTHH:MM:SS)
+// Helper: Format date for storage (YYYY-MM-DDTHH:MM:SS) - no Z suffix
 function formatDateForStorage(date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -92,9 +86,10 @@ function formatDateOnly(date) {
 }
 
 module.exports = {
+  getLocalISOString,
+  getLocalTime,
   getPhilippineTime,
   getPhilippineISOString,
-  getPhilippineDateTimeString,
   calculateDueDatePH,
   formatDateForStorage,
   formatDateOnly
